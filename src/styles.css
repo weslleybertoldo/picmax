@@ -278,6 +278,9 @@ input[type='range'] {
   height: 28px;
   background: transparent;
   margin: 0;
+  /* painel de ajustes é rolável (overflow-y no .editor-panel) — sem isso, o WebView interpreta um
+     arraste levemente diagonal no thumb como scroll do painel e rouba o gesto do slider. */
+  touch-action: none;
 }
 input[type='range']::-webkit-slider-runnable-track {
   height: 4px;

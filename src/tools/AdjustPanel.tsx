@@ -29,25 +29,40 @@ export default function AdjustPanel({ present, dispatch }: AdjustPanelProps) {
   const adjustments = present.adjustments;
   // valor do ajuste ANTES do gesto atual (capturado no pointerdown/keydown, antes de qualquer 'preview').
   const baselineRef = useRef<Partial<Record<keyof Adjustments, number>>>({});
+  // Cópia "viva" de present.adjustments, atualizada de forma SÍNCRONA a cada dispatch — evita a race
+  // de 2 sliders arrastados por dedos diferentes no mesmo tick: como React só propaga a nova `present`
+  // no próximo render, se preview()/commit() lessem direto da prop `present.adjustments` (closure da
+  // render atual), o 2º dispatch do MESMO tick recomporia o patch a partir de um snapshot que ainda não
+  // viu o 1º dispatch — e como 'preview'/'set' substituem `adjustments` por inteiro (não fazem merge
+  // profundo), o 2º dispatch reverteria silenciosamente o valor do 1º. liveRef sempre reflete o último
+  // patch já enviado, mesmo antes do re-render.
+  const liveRef = useRef(present.adjustments);
+  liveRef.current = present.adjustments; // resync a cada render (fonte de verdade quando NENHUM gesto está em voo)
 
   function captureBaseline(key: keyof Adjustments) {
-    if (!(key in baselineRef.current)) baselineRef.current[key] = present.adjustments[key];
+    if (!(key in baselineRef.current)) baselineRef.current[key] = liveRef.current[key];
   }
 
   function preview(key: keyof Adjustments, value: number) {
-    dispatch({ type: 'preview', patch: { adjustments: { ...present.adjustments, [key]: value } } });
+    const next = { ...liveRef.current, [key]: value };
+    liveRef.current = next; // visível pra próxima chamada ANTES do re-render
+    dispatch({ type: 'preview', patch: { adjustments: next } });
   }
 
   function commit(key: keyof Adjustments, value: number) {
-    const baseline = baselineRef.current[key] ?? present.adjustments[key];
+    const baseline = baselineRef.current[key] ?? liveRef.current[key];
     delete baselineRef.current[key];
     if (baseline === value) return; // gesto sem mudança real: não registra entrada vazia no histórico
-    // 'preview' já reescreveu present.adjustments[key] pro valor arrastado — sem reverter aqui, o 'set'
+    // 'preview' já reescreveu liveRef/present[key] pro valor arrastado — sem reverter aqui, o 'set'
     // abaixo empilharia esse MESMO valor em `past` (present já mutado), virando um no-op: o 1º undo não
     // desfaria nada. React encadeia dispatches síncronos pelo reducer em sequência, então revertendo o
     // present pro baseline ANTES do 'set', o histórico fica correto com 1 dispatch por gesto.
-    dispatch({ type: 'preview', patch: { adjustments: { ...present.adjustments, [key]: baseline } } });
-    dispatch({ type: 'set', patch: { adjustments: { ...present.adjustments, [key]: value } } });
+    const reverted = { ...liveRef.current, [key]: baseline };
+    liveRef.current = reverted;
+    dispatch({ type: 'preview', patch: { adjustments: reverted } });
+    const final = { ...liveRef.current, [key]: value };
+    liveRef.current = final;
+    dispatch({ type: 'set', patch: { adjustments: final } });
   }
 
   // Gesto interrompido sem soltura "normal" (pointercancel — gesto de sistema Android, edge-swipe,
@@ -58,11 +73,14 @@ export default function AdjustPanel({ present, dispatch }: AdjustPanelProps) {
     if (!(key in baselineRef.current)) return;
     const baseline = baselineRef.current[key]!;
     delete baselineRef.current[key];
-    dispatch({ type: 'preview', patch: { adjustments: { ...present.adjustments, [key]: baseline } } });
+    const reverted = { ...liveRef.current, [key]: baseline };
+    liveRef.current = reverted;
+    dispatch({ type: 'preview', patch: { adjustments: reverted } });
   }
 
   function restoreDefaults() {
-    dispatch({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS } } });
+    liveRef.current = { ...DEFAULT_ADJUSTMENTS };
+    dispatch({ type: 'set', patch: { adjustments: liveRef.current } });
   }
 
   return (
