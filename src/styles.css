@@ -562,6 +562,15 @@ input[type='range']::-moz-range-thumb {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
+/* v1.1: título pequeno das seções de filtro (Clássicos / Instagram) — mesmo visual do presets-title */
+.filter-section-title {
+  margin: 4px 0 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
 .filter-error {
   display: flex;
   align-items: center;

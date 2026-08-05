@@ -1,7 +1,9 @@
-// src/tools/FilterPanel.tsx — carrossel de filtros: toque aplica 100%, slider ajusta intensidade
+// src/tools/FilterPanel.tsx — carrosséis de filtros em 2 seções (Clássicos + Instagram, v1.1):
+// toque aplica 100%, slider ajusta intensidade — mesmo comportamento nas duas seções.
 import { useEffect, useRef, useState, type Dispatch } from 'react';
 import { createRenderer } from '../engine/renderer';
 import { FILTERS } from '../engine/filters';
+import { IG_FILTERS } from '../engine/igFilters';
 import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, type EditAction, type EditSnapshot, type FilterOp } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import PresetsPanel from '../presets/PresetsPanel';
@@ -18,6 +20,12 @@ export interface FilterPanelProps {
 }
 
 const THUMB_WIDTH = 128;
+
+// Ordem de GERAÇÃO das miniaturas (v1.1, ~40 thumbs): Instagram primeiro (é a 1ª seção visível ao
+// abrir a aba — Dark Sharp Fiel/Forte/Max na frente, decisão de produto), Clássicos na sequência —
+// o loop libera a UI a cada 4 thumbs, então a 1ª leva aparece sem esperar a 2ª. A EXIBIÇÃO usa
+// IG_FILTERS/FILTERS separados (2 carrosséis com título).
+const ALL_FILTER_DEFS: Array<{ id: string }> = [...IG_FILTERS, ...FILTERS];
 
 interface ThumbCache { original: string; filters: Record<string, string> }
 // Cache module-level (sobrevive ao unmount do FilterPanel) — chave = o próprio ImageBitmap, sem
@@ -89,9 +97,9 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
         // default — não os ajustes atuais do usuário. A miniatura representa o filtro em si, não o
         // resultado final da edição (senão mudaria a cada slider da aba Ajustes, muito custoso).
         const filters: Record<string, string> = {};
-        for (let i = 0; i < FILTERS.length; i++) {
+        for (let i = 0; i < ALL_FILTER_DEFS.length; i++) {
           if (cancelled) break;
-          const f = FILTERS[i];
+          const f = ALL_FILTER_DEFS[i];
           renderer.render({
             geometry: DEFAULT_GEOMETRY,
             adjustments: DEFAULT_ADJUSTMENTS,
@@ -106,8 +114,9 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
           setFilterThumbs((prev) => ({ ...prev, [f.id]: url }));
           if (i % 4 === 3) await new Promise((r) => setTimeout(r)); // libera a UI a cada 4 miniaturas
         }
-        // só grava no cache se completou as 20 sem interrupção — cancelado no meio (troca de foto antes
-        // de terminar) não deixa entrada parcial; a próxima montagem pra essa imagem gera tudo de novo.
+        // só grava no cache se completou TODAS (Clássicos + Instagram) sem interrupção — cancelado no
+        // meio (troca de foto antes de terminar) não deixa entrada parcial; a próxima montagem pra
+        // essa imagem gera tudo de novo.
         if (!cancelled) thumbCache.set(image.bitmap, { original: originalUrl, filters });
       } catch (err) {
         if (!cancelled) {
@@ -178,7 +187,11 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
           histórico, desfazível) — crop/anotações/base da IA nunca fazem parte do modelo. */}
       <PresetsPanel variant="inline" title="Meus modelos" onApply={onApplyPreset} refreshKey={presetsVersion} />
 
-      <div className="filter-carousel" data-testid="filter-carousel">
+      {/* 2 carrosséis com título (v1.1): "Instagram" PRIMEIRO (card Original + Dark Sharp
+          Fiel/Forte/Max + 16 CSSgram — ordem de abertura decidida pelo Weslley) e "Clássicos"
+          (os 20 do grade) depois — mesmo card/comportamento nas duas seções. */}
+      <h4 className="filter-section-title">Instagram</h4>
+      <div className="filter-carousel" data-testid="filter-carousel-ig">
         <button
           type="button"
           className={`filter-card${activeId === null ? ' active' : ''}`}
@@ -190,6 +203,24 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
           </span>
           <span className="filter-name">Original</span>
         </button>
+        {IG_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            className={`filter-card${activeId === f.id ? ' active' : ''}`}
+            data-testid={`filter-${f.id}`}
+            onClick={() => selectFilter(f.id)}
+          >
+            <span className="filter-thumb-wrap">
+              {filterThumbs[f.id] ? <img src={filterThumbs[f.id]} alt="" className="filter-thumb" /> : null}
+            </span>
+            <span className="filter-name">{f.name}</span>
+          </button>
+        ))}
+      </div>
+
+      <h4 className="filter-section-title">Clássicos</h4>
+      <div className="filter-carousel" data-testid="filter-carousel">
         {FILTERS.map((f) => (
           <button
             key={f.id}

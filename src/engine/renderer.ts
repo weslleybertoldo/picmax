@@ -1,6 +1,7 @@
 // src/engine/renderer.ts — renderer WebGL1: quad fullscreen + geometria via uUvMat + ajustes/filtro no fragment
 import type { EditSnapshot, Geometry } from '../state/editStack';
-import { filterById, type FilterDef } from './filters';
+import { resolveFilter, type FilterDef } from './filters';
+import type { IgLayer, IgOp } from './igFilters';
 import { FRAG, VERT } from './shaders';
 
 export interface RendererOpts { maxSide?: number }
@@ -101,6 +102,15 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
 
 const NEUTRAL: FilterDef = { id: '', name: 'Neutro', gray: 0, sat: 1, con: 0, gamma: [1, 1, 1], gain: [1, 1, 1], lift: [0, 0, 0] };
 
+// ---- filtros Instagram (v1.1): mapeamentos JS → uniforms do shader (ver igFilters.ts/shaders.ts) ----
+const IG_BLEND_NUM: Record<string, number> = {
+  multiply: 1, screen: 2, overlay: 3, darken: 4, lighten: 5,
+  'color-dodge': 6, 'color-burn': 7, 'soft-light': 8, exclusion: 9,
+};
+const IG_OP_NUM: Record<IgOp['kind'], number> = {
+  sepia: 1, saturate: 2, contrast: 3, brightness: 4, 'hue-rotate': 5, grayscale: 6,
+};
+
 export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {}): Renderer {
   const maxSide = opts.maxSide ?? 2048;
   let gl: WebGLRenderingContext | null = canvas.getContext('webgl', { preserveDrawingBuffer: true });
@@ -143,7 +153,60 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
     highlights: u('uHighlights'), sharpness: u('uSharpness'), vignette: u('uVignette'),
     fGray: u('uFGray'), fSat: u('uFSat'), fCon: u('uFCon'), fIntensity: u('uFIntensity'),
     fGammaInv: u('uFGammaInv'), fGain: u('uFGain'), fLift: u('uFLift'),
+    igActive: u('uIgActive'), igOpKind: u('uIgOpKind'), igOpAmt: u('uIgOpAmt'),
+    clarity: u('uClarity'), clarityRad: u('uClarityRad'),
   };
+  // locations das 2 camadas IG (mesma ordem de uniforms pra cada uma)
+  const igLayerLoc = [0, 1].map((i) => ({
+    meta: u(`uIgL${i}Meta`), geo: u(`uIgL${i}Geo`), stops: u(`uIgL${i}Stops`),
+    c0: u(`uIgL${i}C0`), c1: u(`uIgL${i}C1`), c2: u(`uIgL${i}C2`),
+  }));
+
+  // Cores dos stops PREMULTIPLICADAS (rgb*a, a) — o shader interpola premultiplicado como o CSS.
+  function premult(c: [number, number, number, number]): [number, number, number, number] {
+    return [(c[0] / 255) * c[3], (c[1] / 255) * c[3], (c[2] / 255) * c[3], c[3]];
+  }
+
+  // Uniforms de UMA camada IG. cw/ch = px do canvas (proporcional ao frame): usados pra converter o
+  // raio farthest-corner do radial (px) pra fração no espaço uv-css do shader.
+  function setIgLayer(i: number, layer: IgLayer | null, cw: number, ch: number) {
+    const L = igLayerLoc[i];
+    if (!gl) return;
+    if (!layer) {
+      gl.uniform4f(L.meta, 0, 0, 0, 0);
+      return;
+    }
+    const blend = IG_BLEND_NUM[layer.blend];
+    const opacity = layer.opacity ?? 1;
+    if (layer.kind === 'solid') {
+      gl.uniform4f(L.meta, 1, blend, opacity, 0);
+      gl.uniform4f(L.geo, 0, 0, 0, 0);
+      gl.uniform4f(L.stops, 0, 1, 0, 2);
+      const c = premult(layer.color);
+      gl.uniform4fv(L.c0, c);
+      gl.uniform4fv(L.c1, c);
+      gl.uniform4f(L.c2, 0, 0, 0, 0);
+      return;
+    }
+    const stops = layer.stops;
+    const s0 = stops[0], s1 = stops[1], s2 = stops[2] ?? stops[1];
+    gl.uniform4f(L.stops, s0.pos, s1.pos, s2.pos, stops.length);
+    gl.uniform4fv(L.c0, premult(s0.color));
+    gl.uniform4fv(L.c1, premult(s1.color));
+    gl.uniform4fv(L.c2, premult(s2.color));
+    if (layer.kind === 'linear') {
+      gl.uniform4f(L.meta, 2, blend, opacity, 0);
+      gl.uniform4f(L.geo, layer.from[0], layer.from[1], layer.to[0] - layer.from[0], layer.to[1] - layer.from[1]);
+    } else {
+      // radial `circle` (CSS): raio = distância do centro ao canto MAIS DISTANTE, em px do frame
+      const [cx, cy] = layer.center;
+      const dx = Math.max(cx, 1 - cx) * cw;
+      const dy = Math.max(cy, 1 - cy) * ch;
+      const r = Math.max(1e-6, Math.hypot(dx, dy));
+      gl.uniform4f(L.meta, 3, blend, opacity, 0);
+      gl.uniform4f(L.geo, cx, cy, cw / r, ch / r);
+    }
+  }
 
   let tex: WebGLTexture | null = null;
   let texW = 0, texH = 0;
@@ -196,6 +259,9 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       const texelScale = Math.max(1, 1 / (cover * fit));
       gl.uniform2f(loc.texel, texelScale / texW, texelScale / texH);
 
+      const resolved = snapshot.filter ? resolveFilter(snapshot.filter.id) : null;
+      const intensity = resolved && snapshot.filter ? snapshot.filter.intensity / 100 : 0;
+
       const a = snapshot.adjustments;
       gl.uniform1f(loc.brightness, (a.brightness / 100) * 0.35);
       gl.uniform1f(loc.contrast, (a.contrast / 100) * 0.6);
@@ -204,12 +270,22 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       gl.uniform1f(loc.temperature, a.temperature / 100);
       gl.uniform1f(loc.shadows, a.shadows / 100);
       gl.uniform1f(loc.highlights, a.highlights / 100);
-      gl.uniform1f(loc.sharpness, a.sharpness / 100);
+      // sharpen do FILTRO (v1.1, ex.: Dark Sharp): somado ao do usuário no mesmo pass, escalado pela
+      // intensidade do filtro (o mix de uFIntensity não cobre o sharpen — ele roda ANTES do adjust()).
+      const filterSharpen = (resolved?.def.sharpen ?? 0) * intensity;
+      gl.uniform1f(loc.sharpness, a.sharpness / 100 + filterSharpen);
+      // clarity do filtro (v1.1, só IG/Dark Sharp): raio = fração da LARGURA da textura, com o eixo
+      // v compensado pelo aspecto pra ficar circular em px. Escalado pela intensidade como o sharpen;
+      // uniform 0 = os 12 taps extras nem rodam (branch uniforme no shader).
+      const igDef = resolved?.kind === 'ig' ? resolved.def : null;
+      const clarity = (igDef?.clarity ?? 0) * intensity;
+      gl.uniform1f(loc.clarity, clarity);
+      const clarityRad = igDef?.clarityRadius ?? 0.025;
+      gl.uniform2f(loc.clarityRad, clarityRad, (clarityRad * texW) / texH);
       gl.uniform1f(loc.vignette, (a.vignette / 100) * 0.8);
 
-      const def = snapshot.filter ? filterById(snapshot.filter.id) : null;
-      const f = def ?? NEUTRAL;
-      gl.uniform1f(loc.fIntensity, def && snapshot.filter ? snapshot.filter.intensity / 100 : 0);
+      gl.uniform1f(loc.fIntensity, intensity);
+      const f = resolved?.kind === 'classic' ? resolved.def : NEUTRAL;
       gl.uniform1f(loc.fGray, f.gray);
       gl.uniform1f(loc.fSat, f.sat);
       gl.uniform1f(loc.fCon, f.con);
@@ -217,6 +293,23 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
         1 / Math.max(1e-3, f.gamma[0]), 1 / Math.max(1e-3, f.gamma[1]), 1 / Math.max(1e-3, f.gamma[2]));
       gl.uniform3fv(loc.fGain, f.gain);
       gl.uniform3fv(loc.fLift, f.lift);
+
+      // caminho Instagram (v1.1): ops + camadas só quando um filtro IG está ativo
+      if (resolved?.kind === 'ig') {
+        const ig = resolved.def;
+        gl.uniform1f(loc.igActive, 1);
+        const kinds = [0, 0, 0, 0], amts = [0, 0, 0, 0];
+        ig.ops.slice(0, 4).forEach((o, i) => {
+          kinds[i] = IG_OP_NUM[o.kind];
+          amts[i] = o.kind === 'hue-rotate' ? (o.amount * Math.PI) / 180 : o.amount;
+        });
+        gl.uniform4fv(loc.igOpKind, kinds);
+        gl.uniform4fv(loc.igOpAmt, amts);
+        setIgLayer(0, ig.layers[0] ?? null, cw, ch);
+        setIgLayer(1, ig.layers[1] ?? null, cw, ch);
+      } else {
+        gl.uniform1f(loc.igActive, 0);
+      }
 
       gl.drawArrays(gl.TRIANGLES, 0, 6);
     },

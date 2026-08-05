@@ -39,6 +39,15 @@ projetos endossa ou é afiliado ao PicMax — os créditos são só atribuição
 - **Autor/projeto:** Xintao Wang et al. — <https://github.com/xinntao/Real-ESRGAN>
 - **Licença:** BSD 3-Clause.
 
+## CSSgram
+
+- **O quê:** fórmulas dos filtros estilo Instagram da seção "Instagram" do app
+  (`src/engine/igFilters.ts`). O CSSgram é uma recriação de referência dos filtros do Instagram em
+  CSS puro; o PicMax porta os VALORES (funções de filtro CSS + camadas com blend mode) pro fragment
+  shader WebGL próprio — nenhum código CSS/JS do projeto upstream é embarcado, só os parâmetros.
+- **Autor/projeto:** Una Kravets — <https://github.com/una/CSSgram>
+- **Licença:** MIT.
+
 ## Capacitor
 
 - **O quê:** runtime nativo (bridge WebView↔Kotlin/Java) e plugins oficiais (`@capacitor/core`,

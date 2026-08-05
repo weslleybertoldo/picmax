@@ -1,5 +1,11 @@
-// src/engine/filters.ts — parâmetros do grade(); neutro = sat1 con0 gamma1 gain1 lift0
-export interface FilterDef { id: string; name: string; gray: number; sat: number; con: number; gamma: [number, number, number]; gain: [number, number, number]; lift: [number, number, number] }
+// src/engine/filters.ts — parâmetros do grade() (filtros "Clássicos"); neutro = sat1 con0 gamma1 gain1 lift0.
+// v1.1: convive com os filtros Instagram (igFilters.ts, caminho separado no shader) — resolveFilter()
+// abaixo é o lookup unificado usado pelo renderer.
+import { igFilterById, type IgFilterDef } from './igFilters';
+// `sharpen` (0..1, opcional): nitidez embutida do filtro, somada ao sharpen do usuário no pass
+// existente do shader e escalada pela intensidade do filtro (ver renderer.ts). Hoje usada só pelo
+// Dark Sharp (igFilters), mas o campo existe nos dois tipos por simetria.
+export interface FilterDef { id: string; name: string; gray: number; sat: number; con: number; gamma: [number, number, number]; gain: [number, number, number]; lift: [number, number, number]; sharpen?: number }
 const F = (id: string, name: string, p: Partial<FilterDef> = {}): FilterDef => ({ id, name, gray: 0, sat: 1, con: 0, gamma: [1, 1, 1], gain: [1, 1, 1], lift: [0, 0, 0], ...p });
 export const FILTERS: FilterDef[] = [
   F('pb', 'P&B', { gray: 1 }),
@@ -23,12 +29,20 @@ export const FILTERS: FilterDef[] = [
   F('pastel', 'Pastel', { sat: 0.7, con: -0.12, lift: [0.08, 0.07, 0.08], gamma: [1.08, 1.08, 1.08] }),
   F('tropical', 'Tropical', { sat: 1.3, gain: [1.05, 1.05, 0.9], con: 0.1 }),
 ];
-const warnedUnknownIds = new Set<string>(); // dedup: render() chama filterById todo frame
-export const filterById = (id: string): FilterDef | null => {
-  const f = FILTERS.find(x => x.id === id) ?? null;
-  if (!f && !warnedUnknownIds.has(id)) {
+const warnedUnknownIds = new Set<string>(); // dedup: render() chama resolveFilter todo frame
+export const filterById = (id: string): FilterDef | null => FILTERS.find(x => x.id === id) ?? null;
+
+// Lookup unificado (v1.1): tenta Clássicos, depois Instagram. O warn de id desconhecido vive AQUI
+// (não em filterById) pra um id Instagram não gerar warn falso ao passar pelo lookup clássico.
+export type ResolvedFilter = { kind: 'classic'; def: FilterDef } | { kind: 'ig'; def: IgFilterDef };
+export function resolveFilter(id: string): ResolvedFilter | null {
+  const classic = filterById(id);
+  if (classic) return { kind: 'classic', def: classic };
+  const ig = igFilterById(id);
+  if (ig) return { kind: 'ig', def: ig };
+  if (!warnedUnknownIds.has(id)) {
     warnedUnknownIds.add(id);
     console.warn(`[filters] filtro desconhecido: "${id}"`);
   }
-  return f;
-};
+  return null;
+}
