@@ -13,10 +13,12 @@ export function computeAutoEnhance(bitmap: ImageBitmap): Partial<Adjustments> {
     sumSat += (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]));
   }
   const mean = sum / n, range = (max - min) / 255, sat = sumSat / n / 255;
+  // Math.round em TODOS os campos (v1.1): sem isso, valores como 20.59818339100346 vazavam pra UI
+  // (chips/sliders exibem o valor do snapshot). Slider tem step 1 — ajustes são sempre inteiros.
   return {
-    exposure: Math.max(-40, Math.min(40, (128 - mean) / 128 * 60)), // corrige exposição média
-    contrast: range < 0.85 ? Math.min(35, (0.85 - range) * 120) : 0, // estica histograma achatado
-    saturation: sat < 0.25 ? Math.min(25, (0.25 - sat) * 160) : 0,
+    exposure: Math.round(Math.max(-40, Math.min(40, (128 - mean) / 128 * 60))), // corrige exposição média
+    contrast: range < 0.85 ? Math.round(Math.min(35, (0.85 - range) * 120)) : 0, // estica histograma achatado
+    saturation: sat < 0.25 ? Math.round(Math.min(25, (0.25 - sat) * 160)) : 0,
     sharpness: 20,
   };
 }
