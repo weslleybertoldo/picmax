@@ -15,6 +15,7 @@ import type { EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from './openImage';
 import { createRenderer } from '../engine/renderer';
 import { renderAnnotationsLayer } from '../annotate/drawAnnotations';
+import { decodeOrientedCanvas } from './decodeImage';
 
 export async function exportImage(base: LoadedImage, snap: EditSnapshot): Promise<Blob> {
   let fullBitmap: ImageBitmap | null = null;
@@ -27,7 +28,10 @@ export async function exportImage(base: LoadedImage, snap: EditSnapshot): Promis
 
   try {
     // full-res a partir do arquivo original — o preview (base.bitmap) já foi reduzido no openImage.
-    fullBitmap = await createImageBitmap(base.blob, { imageOrientation: 'from-image' });
+    // decodeOrientedCanvas aplica o EXIF (ver comentário lá — NÃO usar
+    // createImageBitmap(blob, {imageOrientation:'from-image'}) direto: quebra em WebView antiga).
+    const orientedCanvas = await decodeOrientedCanvas(base.blob);
+    fullBitmap = await createImageBitmap(orientedCanvas);
 
     // limits só existe depois de criar um renderer: usa um descartável num canvas 1x1 só pra ler o
     // MAX_TEXTURE_SIZE real da GPU deste device, sem pagar o custo de subir uma textura grande nele.
@@ -42,8 +46,7 @@ export async function exportImage(base: LoadedImage, snap: EditSnapshot): Promis
     let uploadBitmap = fullBitmap;
     if (fullBitmap.width > maxTextureSize || fullBitmap.height > maxTextureSize) {
       const scale = maxTextureSize / Math.max(fullBitmap.width, fullBitmap.height);
-      scaledBitmap = await createImageBitmap(base.blob, {
-        imageOrientation: 'from-image',
+      scaledBitmap = await createImageBitmap(orientedCanvas, {
         resizeQuality: 'high',
         resizeWidth: Math.round(fullBitmap.width * scale),
         resizeHeight: Math.round(fullBitmap.height * scale),

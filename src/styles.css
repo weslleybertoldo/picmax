@@ -30,6 +30,14 @@ html, body {
 }
 
 #root {
+  /* achado real em smoke em emulador Android 11 (WebView = Chrome 83, 2020): `dvh` (dynamic viewport
+     height) só existe a partir do Chromium ~108 — em WebView mais antiga a declaração inteira é
+     inválida e IGNORADA, #root fica com height:auto (tamanho pelo conteúdo, não pela viewport),
+     empurrando a editor-tabs (Anotar/Melhorar) inteira pra fora da tela (inacessível, sem scroll).
+     `100vh` primeiro cobre a WebView antiga (cascade: valor inválido não sobrescreve o anterior);
+     `100dvh` depois é a versão correta pra browsers modernos com toolbar dinâmica — inofensivo aqui
+     (app empacotado, sem chrome de navegador variável), mas mantém compatibilidade categoria "web". */
+  height: 100vh;
   height: 100dvh;
   width: 100%;
   overflow: hidden;
@@ -532,7 +540,12 @@ input[type='range']::-moz-range-thumb {
 .crop-handle::before {
   content: '';
   position: absolute;
-  inset: 14px;
+  /* `inset` (shorthand) não existe no Chrome < 87 — mesmo achado do #root (dvh): WebView 83 ignora a
+     declaração inteira e o indicador visual da alça vira 0x0 (some). Longhand funciona em qualquer versão. */
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
   border: 3px solid #fff;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.2);
@@ -581,7 +594,12 @@ input[type='range']::-moz-range-thumb {
 /* ---------- Mini-modal de texto (ferramenta Texto do Anotar) ---------- */
 .text-modal-backdrop {
   position: fixed;
-  inset: 0;
+  /* `inset` shorthand não existe no Chrome < 87 (mesmo achado acima) — sem isso o backdrop não cobre
+     a tela (vira 0x0/conteúdo), quebrando o modal de texto da aba Anotar em WebView antiga. */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
