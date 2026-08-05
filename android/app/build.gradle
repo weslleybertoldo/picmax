@@ -1,4 +1,5 @@
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android' // Task 8: ImageEnhancerPlugin.kt
 
 android {
     namespace = "com.bertoldo.picmax"
@@ -21,6 +22,11 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+    // capacitor.build.gradle fixa sourceCompatibility/targetCompatibility em Java 21 — o bytecode
+    // Kotlin precisa do mesmo jvmTarget, senão o javac/kotlinc dessincronizam.
+    kotlinOptions {
+        jvmTarget = "21"
     }
 }
 

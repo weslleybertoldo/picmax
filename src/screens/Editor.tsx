@@ -1,9 +1,14 @@
 // src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (Básico, Ajustes e Filtros
 // funcionais) + overlay de crop / grade de endireitar sobre o canvas
 import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { Directory, Filesystem } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { createRenderer, type Renderer } from '../engine/renderer';
 import { editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
+import { exportImage } from '../io/exportImage';
+import { ImageEnhancer } from '../native/imageEnhancer';
 import BasicPanel from '../tools/BasicPanel';
 import CropOverlay from '../tools/CropOverlay';
 import { useCanvasBox } from '../tools/canvasGeometry';
@@ -11,6 +16,28 @@ import AdjustPanel from '../tools/AdjustPanel';
 import FilterPanel from '../tools/FilterPanel';
 import AnnotatePanel from '../tools/AnnotatePanel';
 import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type AnnotateTool } from '../annotate/AnnotationCanvas';
+
+// blob -> base64 SEM o prefixo "data:...;base64," (é o que o plugin Kotlin espera em `base64`, ver
+// ImageEnhancerPlugin.kt). FileReader (não arrayBuffer+btoa manual) porque é a via nativa mais barata
+// pra converter um Blob potencialmente grande (export full-res) sem estourar a pilha de argumentos de
+// String.fromCharCode.
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('Falha ao ler o arquivo exportado.'));
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') return reject(new Error('Falha ao codificar o arquivo exportado.'));
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+function exportFileName(mime: string): string {
+  return `PicMax_${Date.now()}.${mime === 'image/png' ? 'png' : 'jpg'}`;
+}
 
 export interface EditorProps {
   image: LoadedImage;
@@ -76,6 +103,17 @@ export default function Editor({ image, onBack }: EditorProps) {
   const [annotateTool, setAnnotateTool] = useState<AnnotateTool | null>(null);
   const [annotateColor, setAnnotateColor] = useState(DEFAULT_ANNOTATE_COLOR);
   const [annotateSize, setAnnotateSize] = useState(DEFAULT_ANNOTATE_SIZE);
+  // Export/compartilhar (T8): `exportBusy` desabilita os 2 botões (a exportação full-res pode levar
+  // segundos numa foto grande) — só um dos dois roda por vez, sem fila. `toast` é feedback efêmero
+  // (sucesso ou erro, nunca stack trace) — some sozinho depois de 3s (efeito abaixo).
+  const [exportBusy, setExportBusy] = useState<'export' | 'share' | null>(null);
+  const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   // Hook de dev (T6, só em build DEV — tree-shaken em produção via import.meta.env.DEV): permite
   // injetar `annotations` fake por fora da UI (T7 ainda não existe) pra validar a guarda de
@@ -141,6 +179,63 @@ export default function Editor({ image, onBack }: EditorProps) {
     setCropMode(false);
   }
 
+  // Exportar (T8): render full-res via exportImage (geometria+ajustes+filtro+anotações — ver
+  // src/io/exportImage.ts) e grava no MediaStore via o plugin nativo. Na plataforma web dev (sem
+  // Capacitor nativo, `npm run dev`) não existe MediaStore: baixa o blob como download comum
+  // (`<a download>` + Blob URL) — sem isso o botão não teria NENHUM efeito observável fora do device,
+  // e é exatamente esse link que permite validar o pipeline de export de ponta a ponta num navegador
+  // headless (Playwright intercepta o evento de download), sem precisar de emulador Android.
+  async function handleExport() {
+    if (exportBusy) return;
+    setExportBusy('export');
+    try {
+      const blob = await exportImage(image, history.present);
+      if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob);
+        await ImageEnhancer.saveToGallery({ base64, mime: blob.type });
+        setToast({ text: 'Salvo em Pictures/PicMax ✓', kind: 'ok' });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = exportFileName(blob.type);
+        a.setAttribute('data-testid', 'export-download-link');
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000); // dá tempo do navegador consumir o Blob URL
+        setToast({ text: 'Download iniciado (modo dev, sem device nativo)', kind: 'ok' });
+      }
+    } catch (e) {
+      setToast({ text: e instanceof Error ? e.message : 'Não foi possível exportar a imagem.', kind: 'error' });
+    } finally {
+      setExportBusy(null);
+    }
+  }
+
+  // Compartilhar (T8): mesmo render full-res, mas grava em cache (Filesystem, escopo do app — não
+  // aparece na galeria) e abre o share sheet do sistema. Só faz sentido em device nativo (Web Share
+  // API não suporta `files` de forma confiável e não roda em Chromium headless); erro aqui vira toast,
+  // nunca stack trace.
+  async function handleShare() {
+    if (exportBusy) return;
+    setExportBusy('share');
+    try {
+      const blob = await exportImage(image, history.present);
+      const base64 = await blobToBase64(blob);
+      const { uri } = await Filesystem.writeFile({
+        path: exportFileName(blob.type),
+        data: base64,
+        directory: Directory.Cache,
+      });
+      await Share.share({ files: [uri], title: 'PicMax' });
+    } catch (e) {
+      setToast({ text: e instanceof Error ? e.message : 'Não foi possível compartilhar a imagem.', kind: 'error' });
+    } finally {
+      setExportBusy(null);
+    }
+  }
+
   return (
     <div className="editor">
       <div className="editor-topbar">
@@ -168,7 +263,33 @@ export default function Editor({ image, onBack }: EditorProps) {
           ↷
         </button>
         <div className="editor-topbar-spacer" />
+        <button
+          type="button"
+          className="btn btn-secondary btn-export"
+          data-testid="export"
+          aria-label="Exportar"
+          disabled={cropMode || exportBusy !== null}
+          onClick={handleExport}
+        >
+          {exportBusy === 'export' ? <span className="spinner" aria-hidden="true" /> : '⬇'} Exportar
+        </button>
+        <button
+          type="button"
+          className="btn btn-icon"
+          data-testid="share"
+          aria-label="Compartilhar"
+          disabled={cropMode || exportBusy !== null}
+          onClick={handleShare}
+        >
+          {exportBusy === 'share' ? <span className="spinner" aria-hidden="true" /> : '⤴'}
+        </button>
       </div>
+
+      {toast && (
+        <div className={`toast toast-${toast.kind}`} data-testid="toast" role="status">
+          {toast.text}
+        </div>
+      )}
 
       <div className="editor-canvas-wrap" ref={canvasWrapRef}>
         {engineError && (

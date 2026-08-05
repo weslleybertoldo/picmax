@@ -157,6 +157,7 @@ button {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  position: relative; /* ancora o .toast (T8) relativo ao editor, não ao body */
 }
 .editor-topbar {
   display: flex;
@@ -168,6 +169,53 @@ button {
 }
 .editor-topbar-spacer {
   flex: 1;
+}
+.btn-export {
+  padding: 0 14px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* ---------- Export/Share: spinner de progresso (T8) ---------- */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- Toast (feedback de export/share, T8) ---------- */
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 56px;
+  transform: translateX(-50%);
+  max-width: min(90vw, 380px);
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  text-align: center;
+  z-index: 30;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.toast-ok {
+  background: var(--bg-elevated-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.toast-error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border: 1px solid var(--danger-border);
 }
 .editor-canvas-wrap {
   flex: 1;
