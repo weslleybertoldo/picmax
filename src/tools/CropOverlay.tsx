@@ -14,8 +14,9 @@
 // à MESMA fração no frame em pixels, pra qualquer aspecto. Por isso o overlay nunca precisa consultar
 // frameSize().
 import { createPortal } from 'react-dom';
-import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import type { CropRect } from '../state/editStack';
+import { clamp, toFraction, useCanvasBox, type CanvasBox } from './canvasGeometry';
 
 const MIN_SIZE = 0.1; // 10% mínimo em cada dimensão (spec)
 
@@ -43,69 +44,42 @@ export interface CropOverlayProps {
   onApply: (crop: CropRect) => void;
 }
 
-interface Box { left: number; top: number; width: number; height: number }
-
-// Box CSS do canvas em px, relativo a `containerRef` (ancestral position:relative) — recalculado a
-// cada mudança de tamanho do canvas (ex.: girar 90° troca o aspecto) ou do container (resize/rotação
-// de tela). NÃO exportado (Editor.tsx tem sua própria cópia idêntica pra grade do Endireitar — mesmo
-// cálculo, mesmo motivo: o canvas é sempre proporcional ao frame): manter este arquivo exportando só
-// o componente evita o warning de lint react/only-export-components (Fast Refresh).
-function useCanvasBox(
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  containerRef: RefObject<HTMLElement | null>,
-): Box | null {
-  const [box, setBox] = useState<Box | null>(null);
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-    function update() {
-      if (!canvas || !container) return;
-      const c = canvas.getBoundingClientRect();
-      const p = container.getBoundingClientRect();
-      setBox({ left: c.left - p.left, top: c.top - p.top, width: c.width, height: c.height });
-    }
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(canvas);
-    ro.observe(container);
-    window.addEventListener('resize', update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', update);
-    };
-  }, [canvasRef, containerRef]);
-  return box;
-}
-
-function clamp(v: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, v));
-}
-
 // Converte uma razão de PIXEL (ex.: 1 pra "1:1", 16/9 pra "16:9") pra razão equivalente no espaço de
 // FRAÇÃO 0..1 usado pelo CropRect. Bug corrigido (spec review): fração e pixel só têm a MESMA razão
 // quando o frame é quadrado — ww/hh (fração) precisa ser dividido pelo aspecto do frame pra que
 // ww*fw == hh*fh (pixels reais) quando fw≠fh. Como o box CSS do canvas é sempre proporcional ao frame
 // (ver comentário no topo do arquivo), `box.width/box.height` já É o aspecto do frame (fw/fh) — não é
 // preciso consultar frameSize().
-function pixelRatioToFracRatio(pixelRatio: number, box: Box): number {
+function pixelRatioToFracRatio(pixelRatio: number, box: CanvasBox): number {
   return pixelRatio / (box.width / box.height);
 }
 
 // Maior retângulo respeitando `fracRatio` (w/h EM FRAÇÃO, já convertido — ver pixelRatioToFracRatio),
-// centrado no retângulo atual, sem sair de [0,1].
+// centrado no retângulo atual, sem sair de [0,1] e sem cair abaixo de MIN_SIZE (spec review: um
+// aspecto de preset extremo — ex. 16:9 — num frame também extremo pode empurrar a dimensão menor
+// abaixo de 10% se isso não for corrigido).
 function applyRatio(r: CropRect, fracRatio: number): CropRect {
   let w = r.w, h = w / fracRatio;
   if (h > r.h) { h = r.h; w = h * fracRatio; }
   if (w > 1) { w = 1; h = w / fracRatio; }
   if (h > 1) { h = 1; w = h * fracRatio; }
+  // a dimensão "pequena" é sempre a mesma dada a razão (h quando fracRatio>=1, w quando <1) — corrige
+  // só ela e deriva a outra, mantendo fracRatio; clamp final defensivo cobre o caso raríssimo de um
+  // aspecto tão extremo que nem MIN_SIZE cabe em [0,1] mantendo a razão exata.
+  if (fracRatio >= 1) {
+    if (h < MIN_SIZE) { h = MIN_SIZE; w = h * fracRatio; }
+  } else if (w < MIN_SIZE) {
+    w = MIN_SIZE; h = w / fracRatio;
+  }
+  w = clamp(w, MIN_SIZE, 1);
+  h = clamp(h, MIN_SIZE, 1);
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   return { x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h), w, h };
 }
 
 type Drag =
-  | { kind: 'move'; startX: number; startY: number; base: CropRect }
-  | { kind: 'resize'; handle: Handle; fixedX: number; fixedY: number };
+  | { kind: 'move'; pointerId: number; startX: number; startY: number; baseline: CropRect }
+  | { kind: 'resize'; pointerId: number; handle: Handle; fixedX: number; fixedY: number; baseline: CropRect };
 
 export default function CropOverlay({ canvasRef, containerRef, initialCrop, onCancel, onApply }: CropOverlayProps) {
   const [rect, setRect] = useState<CropRect>(initialCrop ?? { x: 0, y: 0, w: 1, h: 1 });
@@ -120,52 +94,45 @@ export default function CropOverlay({ canvasRef, containerRef, initialCrop, onCa
     setRect((r) => (p.ratio && box ? applyRatio(r, pixelRatioToFracRatio(p.ratio, box)) : r));
   }
 
-  // Converte um ponto em coordenadas de VIEWPORT (e.clientX/Y) pra fração 0..1 do canvas. Usa
-  // getBoundingClientRect do canvas DIRETO (não `box`, que é relativo ao container pra fins de CSS
-  // do overlay portalado) — misturar as duas referências fazia a alça de resize "correr" na direção
-  // errada (bug encontrado na verificação: box.top é relativo ao container, e.clientY é absoluto).
-  function toFraction(clientX: number, clientY: number) {
-    const canvas = canvasRef.current;
-    if (!canvas) return { fx: 0, fy: 0 };
-    const r = canvas.getBoundingClientRect();
-    return { fx: clamp((clientX - r.left) / r.width, 0, 1), fy: clamp((clientY - r.top) / r.height, 0, 1) };
-  }
-
   function onHandleDown(e: ReactPointerEvent, handle: Handle) {
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     const cfg = HANDLE_CFG[handle];
     dragRef.current = {
       kind: 'resize',
+      pointerId: e.pointerId,
       handle,
       fixedX: cfg.signX > 0 ? rect.x : rect.x + rect.w,
       fixedY: cfg.signY > 0 ? rect.y : rect.y + rect.h,
+      baseline: rect,
     };
   }
 
   function onBodyDown(e: ReactPointerEvent) {
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = { kind: 'move', startX: e.clientX, startY: e.clientY, base: rect };
+    dragRef.current = { kind: 'move', pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, baseline: rect };
   }
 
   function onMove(e: ReactPointerEvent) {
     const drag = dragRef.current;
-    if (!drag || !box) return;
+    // 2º dedo (pointerId diferente do que iniciou o arraste) não sequestra nem interfere no drag ativo
+    // (spec review, item 2) — só o ponteiro que fez o pointerdown original controla o gesto.
+    if (!drag || !box || e.pointerId !== drag.pointerId) return;
     if (drag.kind === 'move') {
       const dx = (e.clientX - drag.startX) / box.width;
       const dy = (e.clientY - drag.startY) / box.height;
-      const { base } = drag;
+      const { baseline } = drag;
       setRect({
-        x: clamp(base.x + dx, 0, 1 - base.w),
-        y: clamp(base.y + dy, 0, 1 - base.h),
-        w: base.w,
-        h: base.h,
+        x: clamp(baseline.x + dx, 0, 1 - baseline.w),
+        y: clamp(baseline.y + dy, 0, 1 - baseline.h),
+        w: baseline.w,
+        h: baseline.h,
       });
       return;
     }
     const { fixedX, fixedY, handle } = drag;
     const { signX, signY } = HANDLE_CFG[handle];
-    const { fx, fy } = toFraction(e.clientX, e.clientY);
+    const { fx, fy } = toFraction(canvasRef.current, e.clientX, e.clientY);
     const maxW = signX > 0 ? 1 - fixedX : fixedX;
     const maxH = signY > 0 ? 1 - fixedY : fixedY;
     let w = clamp(signX * (fx - fixedX), MIN_SIZE, Math.max(MIN_SIZE, maxW));
@@ -192,8 +159,20 @@ export default function CropOverlay({ canvasRef, containerRef, initialCrop, onCa
     });
   }
 
-  function endDrag() {
+  // Soltura normal (pointerup): mantém o resultado do arraste, só encerra o gesto.
+  function onUp(e: ReactPointerEvent) {
+    const drag = dragRef.current;
+    if (drag && e.pointerId === drag.pointerId) dragRef.current = null;
+  }
+
+  // Interrompido sem soltura normal (pointercancel — ex.: gesto do sistema assumiu o ponteiro no meio
+  // do arraste): reverte pro retângulo de ANTES do gesto (spec review, item 6 — mesma ideia do
+  // cancelGesture dos sliders em useSliderGesture.ts, que também reverte ao baseline).
+  function onCancelDrag(e: ReactPointerEvent) {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
     dragRef.current = null;
+    setRect(drag.baseline);
   }
 
   return (
@@ -206,8 +185,8 @@ export default function CropOverlay({ canvasRef, containerRef, initialCrop, onCa
             data-testid="crop-overlay"
             style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
             onPointerMove={onMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
+            onPointerUp={onUp}
+            onPointerCancel={onCancelDrag}
           >
             <div
               className="crop-rect"

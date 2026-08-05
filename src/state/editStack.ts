@@ -10,6 +10,18 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
 };
 export interface FilterOp { id: string; intensity: number } // 0..100
 export interface CropRect { x: number; y: number; w: number; h: number } // x,y = canto superior esquerdo em frações do frame pós-rotação (y cresce pra baixo)
+
+// Transforma um CropRect definido nas frações do frame ANTES de +1 rotate90 pras frações do frame
+// DEPOIS (mesmo giro de 90° que o renderer aplica ao conteúdo — ver contrato em engine/renderer.ts).
+// Sem essa transformação, girar 90° com um crop ativo mantém as MESMAS frações, que passam a
+// selecionar uma região visual DIFERENTE (o conteúdo girou, o retângulo fixo não acompanhou).
+// Derivação (validada por pixel-check + álgebra a partir de computeUvMatrix em renderer.ts): o giro é
+// HORÁRIO nessa convenção (y-down, como DOM) — cada canto (x,y)→(1-y,x); pra um retângulo isso dá
+// {x: 1-y-h, y: x, w: h, h: w}. 4 aplicações sucessivas voltam ao retângulo original (identidade).
+export function rotateCropRect90(c: CropRect): CropRect {
+  return { x: 1 - c.y - c.h, y: c.x, w: c.h, h: c.w };
+}
+
 export interface Geometry {
   rotate90: 0 | 1 | 2 | 3; flipH: boolean; flipV: boolean;
   straighten: number;            // graus -45..45

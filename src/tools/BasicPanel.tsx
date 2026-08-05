@@ -1,7 +1,7 @@
 // src/tools/BasicPanel.tsx — girar 90°, espelhar H/V, endireitar, redimensionar (export) e entrar no
 // modo Cortar (o overlay em si vive em CropOverlay.tsx / Editor.tsx).
 import { useRef, type Dispatch } from 'react';
-import type { EditAction, EditSnapshot, Geometry } from '../state/editStack';
+import { rotateCropRect90, type EditAction, type EditSnapshot, type Geometry } from '../state/editStack';
 import { useSliderGesture } from './useSliderGesture';
 
 export interface BasicPanelProps {
@@ -44,7 +44,16 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
   function handleRotate90() {
     const hasAnnotations = present.annotations.length > 0;
     if (hasAnnotations && !confirmDiscardAnnotations()) return; // usuário cancelou: aborta sem dispatch
-    const next: Geometry = { ...liveRef.current, rotate90: ((liveRef.current.rotate90 + 1) % 4) as 0 | 1 | 2 | 3 };
+    const g = liveRef.current;
+    // Bug crítico do spec review: girar 90° com um crop ativo, SEM transformar o crop, mantinha as
+    // mesmas frações — que passam a selecionar uma região visual DIFERENTE (o conteúdo girou, o
+    // retângulo fixo não acompanhou). rotateCropRect90 reaplica o MESMO giro no retângulo, em frações,
+    // pra preservar a região visual (ver derivação/prova em state/editStack.ts).
+    const next: Geometry = {
+      ...g,
+      rotate90: ((g.rotate90 + 1) % 4) as 0 | 1 | 2 | 3,
+      crop: g.crop ? rotateCropRect90(g.crop) : null,
+    };
     commitGeometry(next, hasAnnotations);
   }
 

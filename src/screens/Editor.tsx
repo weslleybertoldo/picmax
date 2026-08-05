@@ -1,48 +1,14 @@
 // src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (Básico, Ajustes e Filtros
 // funcionais) + overlay de crop / grade de endireitar sobre o canvas
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
 import { createRenderer, type Renderer } from '../engine/renderer';
 import { editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import BasicPanel from '../tools/BasicPanel';
 import CropOverlay from '../tools/CropOverlay';
+import { useCanvasBox } from '../tools/canvasGeometry';
 import AdjustPanel from '../tools/AdjustPanel';
 import FilterPanel from '../tools/FilterPanel';
-
-interface CanvasBox { left: number; top: number; width: number; height: number }
-
-// Box CSS do canvas em px, relativo a `containerRef` — MESMO cálculo de src/tools/CropOverlay.tsx
-// (cópia intencional, não exportada de lá: um arquivo que exporta um componente E um hook dispara o
-// warning de lint react/only-export-components/Fast Refresh; ambos os usos são pequenos e locais).
-// O canvas é sempre dimensionado (atributos width/height) no aspecto exato do frame, e o CSS
-// (max-width/max-height:100% + width/height:auto) escala esse box mantendo a proporção.
-function useCanvasBox(
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  containerRef: RefObject<HTMLElement | null>,
-): CanvasBox | null {
-  const [box, setBox] = useState<CanvasBox | null>(null);
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-    function update() {
-      if (!canvas || !container) return;
-      const c = canvas.getBoundingClientRect();
-      const p = container.getBoundingClientRect();
-      setBox({ left: c.left - p.left, top: c.top - p.top, width: c.width, height: c.height });
-    }
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(canvas);
-    ro.observe(container);
-    window.addEventListener('resize', update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', update);
-    };
-  }, [canvasRef, containerRef]);
-  return box;
-}
 
 export interface EditorProps {
   image: LoadedImage;
@@ -104,10 +70,16 @@ export default function Editor({ image, onBack }: EditorProps) {
   // Hook de dev (T6, só em build DEV — tree-shaken em produção via import.meta.env.DEV): permite
   // injetar `annotations` fake por fora da UI (T7 ainda não existe) pra validar a guarda de
   // "anotações serão removidas" em Girar 90°/Aplicar crop, sem precisar da aba Anotar já implementada.
-  // Mesmo padrão de "só em dev" já usado no botão de imagem de teste (Home.tsx).
-  if (import.meta.env.DEV) {
-    (window as unknown as { __picmaxDispatch?: (action: EditAction) => void }).__picmaxDispatch = dispatch;
-  }
+  // Mesmo padrão de "só em dev" já usado no botão de imagem de teste (Home.tsx). Em useEffect (spec
+  // review, item 3): atribuir a `window` é um efeito colateral e não deve rodar durante o render
+  // (StrictMode chama a função de render 2x em dev só pra detectar impurezas — a atribuição em si é
+  // idempotente, mas o lugar correto pra side effect é useEffect, não o corpo do componente).
+  // `dispatch` de useReducer é estável entre renders, então o efeito roda 1x por montagem.
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      (window as unknown as { __picmaxDispatch?: (action: EditAction) => void }).__picmaxDispatch = dispatch;
+    }
+  }, [dispatch]);
 
   // Cria o renderer 1x por imagem montada. destroy() sem opts (loseContext=false) — StrictMode roda
   // setup→cleanup→setup no MESMO <canvas> em dev, e um contexto perdido inviabilizaria o 2º setup.
