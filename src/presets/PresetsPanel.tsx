@@ -67,19 +67,30 @@ export default function PresetsPanel({ variant, onApply, refreshKey, title, empt
     setMenuFor(null);
   }
 
+  // Try/catch (T12, robustez): Preferences.set pode rejeitar (storage cheio/indisponível) — sem isso
+  // virava unhandled rejection e o modal ficava aberto pra sempre, sem explicação. Reusa `hint` (já
+  // existe pro caso "Abra uma foto para aplicar") como o feedback efêmero, sem stack trace.
   async function confirmRename() {
     const name = renameValue.trim().slice(0, 40);
     if (!name || !renameTarget) return;
-    await renamePreset(renameTarget.id, name);
-    setRenameTarget(null);
-    setPresets(await listPresets());
+    try {
+      await renamePreset(renameTarget.id, name);
+      setRenameTarget(null);
+      setPresets(await listPresets());
+    } catch {
+      setHint('Não foi possível renomear o modelo.');
+    }
   }
 
   async function handleDelete(p: EditPreset) {
     setMenuFor(null);
     if (!window.confirm(`Excluir o modelo "${p.name}"? Essa ação não pode ser desfeita.`)) return;
-    await deletePreset(p.id);
-    setPresets(await listPresets());
+    try {
+      await deletePreset(p.id);
+      setPresets(await listPresets());
+    } catch {
+      setHint('Não foi possível excluir o modelo.');
+    }
   }
 
   if (presets.length === 0) {

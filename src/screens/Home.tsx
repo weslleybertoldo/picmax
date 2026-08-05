@@ -1,6 +1,6 @@
 // src/screens/Home.tsx — tela inicial: abrir da galeria, tirar foto (e, em dev, imagem de teste)
 import { useState } from 'react';
-import { openImage, type LoadedImage } from '../io/openImage';
+import { CameraPermissionDeniedError, openImage, PhotoTooLargeError, type LoadedImage } from '../io/openImage';
 import PresetsPanel from '../presets/PresetsPanel';
 import { checkLatest, downloadAndInstall, NoApkAssetError, type UpdateInfo } from '../update/apkUpdater';
 
@@ -105,8 +105,21 @@ export default function Home({ onImage }: HomeProps) {
     try {
       const image = await openImage(source);
       if (image) onImage(image);
-    } catch {
-      setError('Não foi possível abrir a imagem. Tente novamente.');
+    } catch (e) {
+      // 3 casos distintos (T12): permissão negada precisa de instrução (o app não tem como abrir as
+      // Configurações do sistema sozinho — nenhum plugin pra isso, decisão do plano); foto grande
+      // demais precisa dizer QUAL é o limite; qualquer outra falha (rede, hardware, decode) cai no
+      // genérico de sempre. Nenhum deles mostra stack trace.
+      if (e instanceof CameraPermissionDeniedError) {
+        setError(
+          `Permissão negada para ${source === 'camera' ? 'câmera' : 'galeria'}. Habilite o acesso em ` +
+            'Configurações do sistema → Apps → PicMax → Permissões e tente novamente.',
+        );
+      } else if (e instanceof PhotoTooLargeError) {
+        setError(e.message);
+      } else {
+        setError('Não foi possível abrir a imagem. Tente novamente.');
+      }
     } finally {
       setBusy(null);
     }

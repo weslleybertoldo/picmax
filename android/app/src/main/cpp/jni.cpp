@@ -171,7 +171,27 @@ Java_com_bertoldo_picmax_ImageEnhancerPlugin_nativeEnhance(JNIEnv* env, jobject 
         return !g_cancel.load(std::memory_order_relaxed);
     };
 
-    const int rc = g_engine->process(rgb, w, h, out.get(), onTile);
+    int rc = g_engine->process(rgb, w, h, out.get(), onTile);
+    // Retry único com tilesize pela metade (T12, robustez) em falha de processamento (rc==1). O ncnn
+    // roda com -fno-exceptions neste build (ver comentário sobre "new(nothrow)" acima) — bad_alloc
+    // nunca chega aqui como exceção, só como o MESMO código de erro genérico que qualquer outra falha
+    // do Extractor (blob incompatível, etc.), então não há como distinguir "falta de memória" de outro
+    // erro pelo valor de retorno (limitação documentada, não deu pra fazer melhor sem instrumentar o
+    // ncnn). Best-effort: tile menor = pico de memória por inferência menor, cobre o caso comum (OOM
+    // num device/tile grande) sem custo no caminho feliz; se a causa raiz não for memória, a 2ª
+    // tentativa falha igual e o erro sobe do mesmo jeito — só custou um pouco de tempo. Guardado por
+    // tilesize>32 pra nunca tentar 2x com um tile já degenerado. tilesize é restaurado depois: o
+    // engine é CACHEADO entre chamadas (ver nativeInit) e o próximo enhance não deve herdar o tile
+    // reduzido desta falha.
+    if (rc == kError && g_engine->tilesize > 32) {
+        const int originalTilesize = g_engine->tilesize;
+        g_engine->tilesize = std::max(32, originalTilesize / 2);
+        LOGI("falha no processamento (rc=1) — retry único com tilesize %d -> %d", originalTilesize,
+             g_engine->tilesize);
+        lastPercent = -1; // progresso reinicia do zero na tentativa nova
+        rc = g_engine->process(rgb, w, h, out.get(), onTile);
+        g_engine->tilesize = originalTilesize;
+    }
     if (rc != kOk) {
         if (rc == kCancelled) LOGI("processamento cancelado");
         return rc;

@@ -5,7 +5,7 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { createRenderer, type Renderer } from '../engine/renderer';
-import { DEFAULT_ADJUSTMENTS, editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
+import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import { blobToBase64 } from '../io/blobToBase64';
 import { exportImage } from '../io/exportImage';
@@ -22,6 +22,39 @@ import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type A
 
 function exportFileName(mime: string): string {
   return `PicMax_${Date.now()}.${mime === 'image/png' ? 'png' : 'jpg'}`;
+}
+
+// Voltar pra Home com edição não exportada (T12): diferente de `isNeutralEdit` (só ajustes+filtro,
+// usado pro botão "Salvar modelo" — ver comentário mais abaixo), esta checagem cobre TUDO que se
+// perderia ao sair sem exportar: geometria (crop/rotação/flip/straighten), anotações e a base ativa
+// (troca pela IA). É comparada contra `history.past.length > 0` no botão Voltar: só pergunta quando
+// existe histórico desfazível (algo foi de fato commitado) E o snapshot atual ainda não é neutro
+// (um usuário que edita e desfaz tudo de volta não deveria ser interrompido ao saír).
+function isNeutralSnapshot(s: EditSnapshot): boolean {
+  return (
+    s.baseVersion === 0 &&
+    s.filter === null &&
+    s.annotations.length === 0 &&
+    s.geometry.rotate90 === DEFAULT_GEOMETRY.rotate90 &&
+    s.geometry.flipH === DEFAULT_GEOMETRY.flipH &&
+    s.geometry.flipV === DEFAULT_GEOMETRY.flipV &&
+    s.geometry.straighten === DEFAULT_GEOMETRY.straighten &&
+    s.geometry.crop === DEFAULT_GEOMETRY.crop &&
+    s.geometry.resizeMaxSide === DEFAULT_GEOMETRY.resizeMaxSide &&
+    (Object.keys(DEFAULT_ADJUSTMENTS) as Array<keyof typeof DEFAULT_ADJUSTMENTS>).every(
+      (k) => s.adjustments[k] === DEFAULT_ADJUSTMENTS[k],
+    )
+  );
+}
+
+// Antes/depois (T12): segurar o dedo no canvas por >=200ms mostra a foto com o snapshot neutro da
+// base ATUAL (geometria/ajustes/filtro/anotações no default, mas a MESMA base — a textura já
+// carregada no renderer não muda). baseVersion não influencia o render() do WebGL em si (a textura
+// já está fixada via setImage; o campo só existe pro Editor/App saberem QUAL bitmap carregar) — mantido
+// aqui só por completude semântica ("snapshot neutro da base atual", conforme o plano).
+const HOLD_DELAY_MS = 200;
+function neutralSnapshotOfBase(baseVersion: number): EditSnapshot {
+  return { ...initialSnapshot(), baseVersion };
 }
 
 export interface EditorProps {
@@ -108,6 +141,11 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   const [presetName, setPresetName] = useState('');
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetsVersion, setPresetsVersion] = useState(0);
+  // Antes/depois (T12): `showOriginal` true enquanto o dedo segura o canvas por >=HOLD_DELAY_MS fora
+  // do modo Cortar/Anotar (ver handleHoldStart). holdTimerRef guarda o setTimeout pendente pra poder
+  // cancelá-lo se o dedo soltar ANTES dos 200ms (nesse caso showOriginal nunca chega a virar true).
+  const [showOriginal, setShowOriginal] = useState(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -169,14 +207,48 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     [cropMode, history.present],
   );
 
+  // Antes/depois (T12): enquanto `showOriginal`, substitui o snapshot renderizado pelo neutro da base
+  // atual (ver neutralSnapshotOfBase acima) — independente do modo Cortar, já que o hold-gesture é
+  // desabilitado nesse modo (ver handleHoldStart). useMemo pelo mesmo motivo do displaySnapshot: manter
+  // referência estável fora do instante em que showOriginal/displaySnapshot de fato mudam.
+  const renderSnapshot: EditSnapshot = useMemo(
+    () => (showOriginal ? neutralSnapshotOfBase(history.present.baseVersion) : displaySnapshot),
+    [showOriginal, displaySnapshot, history.present.baseVersion],
+  );
+
   // Render coalescido com rAF: se o snapshot exibido mudar de novo antes do frame disparar, o cleanup
   // cancela o rAF pendente e agenda um novo — nunca desenha um snapshot já obsoleto.
   useEffect(() => {
     const renderer = rendererRef.current;
     if (!renderer) return;
-    const raf = requestAnimationFrame(() => renderer.render(displaySnapshot));
+    const raf = requestAnimationFrame(() => renderer.render(renderSnapshot));
     return () => cancelAnimationFrame(raf);
-  }, [displaySnapshot]);
+  }, [renderSnapshot]);
+
+  // Solta o hold em qualquer desmontagem/troca de imagem (ex.: a IA troca a base enquanto o dedo
+  // segurava — improvável, já que o modal da IA bloqueia a tela, mas defensivo e sem custo).
+  useEffect(() => {
+    return () => {
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    };
+  }, []);
+
+  // Antes/depois: pointerdown fora do modo Cortar/Anotar (ferramenta ativa) inicia o timer; só troca
+  // pra "Original" se o dedo ainda estiver na tela HOLD_DELAY_MS depois (um toque rápido não deve
+  // disparar o hint por 1 frame). onPointerUp/Cancel/Leave sempre cancelam (idempotente: clearTimeout
+  // de um timer já disparado é no-op, e setShowOriginal(false) quando já é false não rerenderiza).
+  function handleHoldStart() {
+    if (cropMode || (activeTab === 'anotar' && annotateTool !== null)) return;
+    if (holdTimerRef.current) return; // já em andamento (ex.: 2º dedo) — ignora
+    holdTimerRef.current = setTimeout(() => setShowOriginal(true), HOLD_DELAY_MS);
+  }
+  function handleHoldEnd() {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    setShowOriginal(false);
+  }
 
   // Resultado da IA (T10): acrescenta a base nova ao array do App e troca o baseVersion no MESMO
   // handler (React faz batch dos dois) — o índice da base nova é bases.length ANTES do append.
@@ -286,10 +358,20 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     }
   }
 
+  // Voltar pra Home (T12): confirma antes de descartar uma edição que ainda não foi exportada — só
+  // pergunta quando há histórico desfazível E o resultado ainda é visivelmente diferente do original
+  // (ver isNeutralSnapshot acima). `window.confirm` é o mesmo padrão já usado em handleCropApply.
+  function handleBackClick() {
+    if (history.past.length > 0 && !isNeutralSnapshot(history.present)) {
+      if (!window.confirm('Descartar edição?')) return;
+    }
+    onBack();
+  }
+
   return (
     <div className="editor">
       <div className="editor-topbar">
-        <button type="button" className="btn btn-icon" data-testid="back" aria-label="Voltar" onClick={onBack}>
+        <button type="button" className="btn btn-icon" data-testid="back" aria-label="Voltar" onClick={handleBackClick}>
           ←
         </button>
         <button
@@ -388,13 +470,27 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
         </div>
       )}
 
-      <div className="editor-canvas-wrap" ref={canvasWrapRef}>
+      <div
+        className="editor-canvas-wrap"
+        ref={canvasWrapRef}
+        onPointerDown={handleHoldStart}
+        onPointerUp={handleHoldEnd}
+        onPointerCancel={handleHoldEnd}
+        onPointerLeave={handleHoldEnd}
+      >
         {engineError && (
           <p className="editor-error" data-testid="engine-error">
             {engineError}
           </p>
         )}
         <canvas ref={canvasRef} className="editor-canvas" data-testid="canvas" />
+        {/* Antes/depois (T12): hint pequeno enquanto showOriginal — pointer-events:none (CSS) pra
+            nunca interceptar o próprio gesto que o mostra. */}
+        {showOriginal && (
+          <span className="original-hint" data-testid="original-hint">
+            Original
+          </span>
+        )}
         {showStraightenGrid && <StraightenGrid canvasRef={canvasRef} containerRef={canvasWrapRef} />}
         {/* Camada de anotações: visível em TODAS as abas (anotações fazem parte da edição), mas só
             captura pointer na aba Anotar com uma ferramenta ativa. Desmontada inteira no modo Cortar

@@ -266,6 +266,23 @@ button {
   border-radius: 8px;
   background: #000;
 }
+/* ---------- Antes/depois (hold-to-compare no canvas, T12) ---------- */
+.original-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--border);
+  pointer-events: none;
+  z-index: 20;
+}
 .editor-error {
   position: absolute;
   left: 10px;
