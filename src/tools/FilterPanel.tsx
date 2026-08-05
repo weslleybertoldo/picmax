@@ -98,6 +98,7 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
             filter: { id: f.id, intensity: 100 },
             annotations: [],
             baseVersion: 0,
+            autoEnhance: null,
           });
           const url = offCanvas.toDataURL('image/jpeg', 0.8);
           if (cancelled) break;

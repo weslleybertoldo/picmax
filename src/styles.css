@@ -950,6 +950,12 @@ input[type='range']::-moz-range-thumb {
 .enhance-card-btn {
   margin-top: 2px;
 }
+/* v1.1: estado "Aplicado ✓ — toque para desfazer" (outline verde, permanente até desfazer) */
+.enhance-applied {
+  border-color: #34c759;
+  color: #34c759;
+  font-weight: 700;
+}
 .enhance-card-ai {
   opacity: 0.85;
 }

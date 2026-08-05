@@ -66,10 +66,17 @@ export interface EditSnapshot {
   geometry: Geometry; adjustments: Adjustments;
   filter: FilterOp | null; annotations: Annotation[];
   baseVersion: number; // 0 = original; incrementa quando a IA troca a base
+  // Estado "Aplicado ✓" do auto-ajuste (v1.1): `before` = adjustments de ANTES do auto-ajuste, pra o
+  // toggle de desfazer no card da aba Melhorar. null = não aplicado. Faz parte do snapshot (undo/redo
+  // andam junto), mas NÃO entra em modelos/presets (presets.ts salva só adjustments+filter). Mexer
+  // manualmente nos sliders DEPOIS de aplicar mantém o estado "aplicado" de propósito — desfazer
+  // restaura o `before` salvo, descartando também os ajustes manuais feitos por cima (documentado
+  // no card em EnhancePanel.tsx).
+  autoEnhance: { before: Adjustments } | null;
 }
 export const initialSnapshot = (): EditSnapshot => ({
   geometry: DEFAULT_GEOMETRY, adjustments: { ...DEFAULT_ADJUSTMENTS },
-  filter: null, annotations: [], baseVersion: 0,
+  filter: null, annotations: [], baseVersion: 0, autoEnhance: null,
 });
 
 export interface EditHistory { past: EditSnapshot[]; present: EditSnapshot; future: EditSnapshot[] }

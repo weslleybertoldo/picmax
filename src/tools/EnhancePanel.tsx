@@ -1,7 +1,8 @@
 // src/tools/EnhancePanel.tsx — aba Melhorar: 2 cards empilhados (auto-ajuste instantâneo da T9 +
 // IA Real-ESRGAN 4x offline da T10, só em plataforma nativa — no web dev o botão fica desabilitado
-// com hint, não existe libpicmaxenhance.so fora do APK).
-import { useEffect, useRef, useState, type Dispatch } from 'react';
+// com hint, não existe libpicmaxenhance.so fora do APK). v1.1: os 2 cards ganharam estado "Aplicado ✓"
+// PERMANENTE com toggle de desfazer (ver handleAutoEnhance/handleAiClick).
+import { useState, type Dispatch } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { computeAutoEnhance } from '../engine/autoEnhance';
@@ -17,9 +18,10 @@ export interface EnhancePanelProps {
   // T10: entrega a base nova (resultado 4x da IA) pro Editor, que a acrescenta ao array de bases do
   // App e troca o baseVersion num dispatch 'set' (desfazível) — ver handleNewBase em Editor.tsx.
   onNewBase: (img: LoadedImage) => void;
+  // v1.1: tamanho do array de bases do App — permite REAPLICAR a IA sem reprocessar quando um
+  // resultado já existe (bases.length > 1): só volta o baseVersion pro índice do resultado.
+  basesCount: number;
 }
-
-const APPLIED_FEEDBACK_MS = 1500;
 
 // Estado do fluxo de IA. usingGpu null = ainda sem o 1º evento de progresso (o Kotlin emite percent
 // 0 logo após carregar o modelo, então o modo GPU/CPU aparece quase imediato).
@@ -27,32 +29,36 @@ type AiState =
   | { phase: 'idle' }
   | { phase: 'running'; percent: number; usingGpu: boolean | null; cancelling: boolean };
 
-export default function EnhancePanel({ present, dispatch, image, onNewBase }: EnhancePanelProps) {
-  // Micro-feedback local (T9): o texto do botão vira "Aplicado ✓" por ~1.5s — puramente visual, NÃO
-  // entra no EditSnapshot/histórico (mesmo espírito do `toast` do Editor, só que escopado ao botão em
-  // vez de global). timerRef permite reiniciar a contagem se o usuário clicar de novo antes de acabar.
-  const [applied, setApplied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+export default function EnhancePanel({ present, dispatch, image, onNewBase, basesCount }: EnhancePanelProps) {
   const [aiState, setAiState] = useState<AiState>({ phase: 'idle' });
   const [aiError, setAiError] = useState<string | null>(null);
   const isNative = Capacitor.isNativePlatform();
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
+  // Estado "Aplicado ✓" do auto-ajuste (v1.1): vive no SNAPSHOT (present.autoEnhance), não em state
+  // local — sobrevive a troca de aba, entra no undo/redo e o card mostra o estado permanente.
+  const autoApplied = present.autoEnhance !== null;
 
-  // Analisa o bitmap de PREVIEW atual (image.bitmap, ≤2048 — ver autoEnhance.ts) e aplica os ajustes
-  // calculados por CIMA dos ajustes atuais do usuário (spread de present.adjustments primeiro). Uma
-  // única entrada de histórico (dispatch 'set'), instantâneo e desfazível com undo — a base da imagem
-  // (image.bitmap) nunca muda aqui, só os uniforms de ajuste do renderer.
+  // Aplicar: analisa o bitmap de PREVIEW atual (≤2048 — ver autoEnhance.ts), aplica os ajustes
+  // calculados por CIMA dos ajustes atuais e guarda `before` = adjustments de ANTES num ÚNICO
+  // dispatch 'set' (1 entrada de histórico). Desfazer (2º clique): restaura o `before` salvo e zera
+  // autoEnhance — também 1 'set', desfazível com undo. IMPORTANTE (documentado na spec): se o usuário
+  // mexer manualmente nos sliders DEPOIS de aplicar, o estado "aplicado" PERMANECE — o desfazer
+  // restaura o `before` salvo no momento da aplicação (descarta também os ajustes manuais feitos por
+  // cima). É o comportamento desejado: o card desfaz "o auto-ajuste e tudo que veio depois dele nos
+  // sliders", e o undo do histórico continua disponível pra granularidade fina.
   function handleAutoEnhance() {
+    if (present.autoEnhance) {
+      dispatch({ type: 'set', patch: { adjustments: present.autoEnhance.before, autoEnhance: null } });
+      return;
+    }
     const auto = computeAutoEnhance(image.bitmap);
-    dispatch({ type: 'set', patch: { adjustments: { ...present.adjustments, ...auto } } });
-    setApplied(true);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setApplied(false), APPLIED_FEEDBACK_MS);
+    dispatch({
+      type: 'set',
+      patch: {
+        adjustments: { ...present.adjustments, ...auto },
+        autoEnhance: { before: present.adjustments },
+      },
+    });
   }
 
   // IA (T10): grava a BASE atual (image.blob — full-res, não o preview) em cache → plugin nativo
@@ -109,20 +115,49 @@ export default function EnhancePanel({ present, dispatch, image, onNewBase }: En
 
   const running = aiState.phase === 'running';
 
+  // Estado "Aplicado ✓" da IA (v1.1): aplicado = snapshot apontando pra uma base ≠ original.
+  // Desfazer: set {baseVersion: 0} — volta pra base original SEM jogar fora o resultado (os bitmaps
+  // ficam vivos no array bases[] do App). aiResultIndex: se já existe um resultado processado
+  // (basesCount > 1), REAPLICAR só volta o baseVersion pro índice dele — sem reprocessar (instantâneo
+  // e desfazível; documentado na spec: mais rápido e óbvio pro usuário do que rodar a IA de novo).
+  // Só a ÚLTIMA base entra no atalho (bases.length-1): é o resultado mais recente da IA.
+  const aiApplied = present.baseVersion > 0;
+  const aiResultIndex = basesCount > 1 ? basesCount - 1 : null;
+
+  function handleAiClick() {
+    if (aiApplied) {
+      dispatch({ type: 'set', patch: { baseVersion: 0 } });
+      return;
+    }
+    if (aiResultIndex !== null) {
+      dispatch({ type: 'set', patch: { baseVersion: aiResultIndex } });
+      return;
+    }
+    void handleAiEnhance();
+  }
+
+  // Desfazer/reaplicar são dispatches puros (funcionam em qualquer plataforma — inclusive na
+  // validação headless); só PROCESSAR de novo exige o plugin nativo.
+  const aiDisabled = running || (!isNative && !aiApplied && aiResultIndex === null);
+
   return (
     <div className="enhance-panel">
       <div className="enhance-card">
         <div className="enhance-card-header">
           <h3 className="enhance-card-title">Ajuste automático</h3>
         </div>
-        <p className="enhance-card-desc">Ajuste automático instantâneo</p>
+        <p className="enhance-card-desc">
+          {autoApplied
+            ? 'Desfazer restaura os ajustes de antes do auto-ajuste (inclusive por cima de mudanças manuais)'
+            : 'Ajuste automático instantâneo'}
+        </p>
         <button
           type="button"
-          className="btn btn-primary enhance-card-btn"
+          className={autoApplied ? 'btn btn-secondary enhance-card-btn enhance-applied' : 'btn btn-primary enhance-card-btn'}
           data-testid="enhance-auto"
           onClick={handleAutoEnhance}
         >
-          {applied ? 'Aplicado ✓' : 'Melhorar qualidade'}
+          {autoApplied ? 'Aplicado ✓ — toque para desfazer' : 'Melhorar qualidade'}
         </button>
       </div>
 
@@ -143,12 +178,16 @@ export default function EnhancePanel({ present, dispatch, image, onNewBase }: En
         )}
         <button
           type="button"
-          className="btn btn-secondary enhance-card-btn"
+          className={`btn btn-secondary enhance-card-btn${aiApplied ? ' enhance-applied' : ''}`}
           data-testid="enhance-ai"
-          disabled={!isNative || running}
-          onClick={handleAiEnhance}
+          disabled={aiDisabled}
+          onClick={handleAiClick}
         >
-          Melhorar qualidade com IA
+          {aiApplied
+            ? 'Aplicado ✓ — toque para desfazer'
+            : aiResultIndex !== null
+              ? 'Reaplicar melhoria com IA'
+              : 'Melhorar qualidade com IA'}
         </button>
       </div>
 

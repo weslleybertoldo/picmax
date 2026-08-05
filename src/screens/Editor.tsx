@@ -279,10 +279,12 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // Resultado da IA (T10): acrescenta a base nova ao array do App e troca o baseVersion no MESMO
   // handler (React faz batch dos dois) — o índice da base nova é bases.length ANTES do append.
   // Desfazível: undo volta o baseVersion e este Editor re-deriva `image` da base antiga (viva).
+  // Toast (v1.1): feedback global ao concluir a IA, além do estado "Aplicado ✓" no card.
   function handleNewBase(img: LoadedImage) {
     const newIndex = bases.length;
     onAddBase(img);
     dispatchEdit({ type: 'set', patch: { baseVersion: newIndex } });
+    setToast({ text: 'Melhoria aplicada ✓', kind: 'ok' });
   }
 
   // Aplicar modelo (T11): 1 dispatch 'set' com adjustments+filter do modelo — 1 entrada de histórico,
@@ -622,7 +624,13 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
                 onSizeChange={setAnnotateSize}
               />
             ) : (
-              <EnhancePanel present={history.present} dispatch={dispatchEdit} image={image} onNewBase={handleNewBase} />
+              <EnhancePanel
+                present={history.present}
+                dispatch={dispatchEdit}
+                image={image}
+                onNewBase={handleNewBase}
+                basesCount={bases.length}
+              />
             )}
           </div>
 
