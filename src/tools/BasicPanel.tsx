@@ -1,7 +1,7 @@
 // src/tools/BasicPanel.tsx — girar 90°, espelhar H/V, endireitar, redimensionar (export) e entrar no
 // modo Cortar (o overlay em si vive em CropOverlay.tsx / Editor.tsx).
 import { useRef, type Dispatch } from 'react';
-import { rotateCropRect90, type EditAction, type EditSnapshot, type Geometry } from '../state/editStack';
+import { mirrorCropRect, rotateCropRect90, type EditAction, type EditSnapshot, type Geometry } from '../state/editStack';
 import { useSliderGesture } from './useSliderGesture';
 
 export interface BasicPanelProps {
@@ -49,16 +49,29 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
     // mesmas frações — que passam a selecionar uma região visual DIFERENTE (o conteúdo girou, o
     // retângulo fixo não acompanhou). rotateCropRect90 reaplica o MESMO giro no retângulo, em frações,
     // pra preservar a região visual (ver derivação/prova em state/editStack.ts).
+    // 2ª rodada de review: flip e rotação não comutam — com exatamente 1 flip ativo (H xor V) o giro
+    // do retângulo precisa ser o INVERSO. flipH/flipV não mudam neste botão (só rotate90 muda), então
+    // a paridade usada é simplesmente o XOR dos dois flips atuais.
+    const flipParityOdd = g.flipH !== g.flipV;
     const next: Geometry = {
       ...g,
       rotate90: ((g.rotate90 + 1) % 4) as 0 | 1 | 2 | 3,
-      crop: g.crop ? rotateCropRect90(g.crop) : null,
+      crop: g.crop ? rotateCropRect90(g.crop, flipParityOdd) : null,
     };
     commitGeometry(next, hasAnnotations);
   }
 
   function toggleFlip(axis: 'flipH' | 'flipV') {
-    const next: Geometry = { ...liveRef.current, [axis]: !liveRef.current[axis] };
+    const g = liveRef.current;
+    // Achado durante a validação do fix de rotate90+flip: espelhar SOZINHO, com um crop ativo, já
+    // corrompia a seleção (o flip espelha em torno do centro do FRAME cheio, não do centro do próprio
+    // retângulo de crop — ver prova/derivação em state/editStack.ts). mirrorCropRect mantém a região
+    // visual: Espelhar H mirra crop.x, Espelhar V mirra crop.y (regra igual pra qualquer rotate90 atual).
+    const next: Geometry = {
+      ...g,
+      [axis]: !g[axis],
+      crop: g.crop ? mirrorCropRect(g.crop, axis === 'flipH' ? 'x' : 'y') : null,
+    };
     commitGeometry(next, false);
   }
 

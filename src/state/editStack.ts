@@ -15,11 +15,32 @@ export interface CropRect { x: number; y: number; w: number; h: number } // x,y 
 // DEPOIS (mesmo giro de 90° que o renderer aplica ao conteúdo — ver contrato em engine/renderer.ts).
 // Sem essa transformação, girar 90° com um crop ativo mantém as MESMAS frações, que passam a
 // selecionar uma região visual DIFERENTE (o conteúdo girou, o retângulo fixo não acompanhou).
-// Derivação (validada por pixel-check + álgebra a partir de computeUvMatrix em renderer.ts): o giro é
-// HORÁRIO nessa convenção (y-down, como DOM) — cada canto (x,y)→(1-y,x); pra um retângulo isso dá
-// {x: 1-y-h, y: x, w: h, h: w}. 4 aplicações sucessivas voltam ao retângulo original (identidade).
-export function rotateCropRect90(c: CropRect): CropRect {
-  return { x: 1 - c.y - c.h, y: c.x, w: c.h, h: c.w };
+// Derivação (validada por pixel-check + álgebra a partir de computeUvMatrix em renderer.ts): com 0 ou
+// 2 flips ativos (paridade PAR) o giro é HORÁRIO nessa convenção (y-down, como DOM) — cada canto
+// (x,y)→(1-y,x); pra um retângulo isso dá {x:1-y-h, y:x, w:h, h:w}.
+//
+// flip e rotação NÃO comutam (2ª rodada de review, achado por verificação numérica): com exatamente
+// 1 flip ativo (flipH XOR flipV — paridade ÍMPAR), o giro do RETÂNGULO precisa ser o INVERSO da
+// fórmula acima — flipar espelha o sentido em que os cantos percorrem o quadrado ao rotacionar. A
+// inversa algébrica de {x:1-y-h, y:x, w:h, h:w} é {x:y, y:1-x-w, w:h, h:w} (resolvendo o sistema:
+// y'=x, h'=w, w'=h, x'=1-y-h ⟺ x=y', w=h', h=w', y=1-x'-h=1-x'-w').
+// 4 aplicações sucessivas (com a MESMA paridade de flip mantida) voltam ao retângulo original.
+export function rotateCropRect90(c: CropRect, flipParityOdd: boolean): CropRect {
+  return flipParityOdd
+    ? { x: c.y, y: 1 - c.x - c.w, w: c.h, h: c.w }
+    : { x: 1 - c.y - c.h, y: c.x, w: c.h, h: c.w };
+}
+
+// Achado durante a validação da rotação+flip (3ª rodada de review): Espelhar H/V SOZINHO, mesmo sem
+// girar, já corrompe um crop ativo — o flip espelha em torno do centro do FRAME inteiro (não do
+// centro do próprio retângulo de crop), então uma janela de crop não-centrada passa a revelar uma
+// região FISICAMENTE DIFERENTE da foto (confirmado por pixel-check: cortar no quadrante do marcador
+// e só espelhar H, sem girar, já faz o marcador desaparecer da vista). Espelhar H mirra crop.x (1-x-w);
+// Espelhar V mirra crop.y (1-y-h) — essa regra é a MESMA pra qualquer rotate90 atual (0..3), porque
+// crop.x/y já estão nas frações do OUTPUT (alinhadas à tela, não à textura) — verificado
+// algebricamente pra k=0..3 a partir de computeUvMatrix.
+export function mirrorCropRect(c: CropRect, axis: 'x' | 'y'): CropRect {
+  return axis === 'x' ? { ...c, x: 1 - c.x - c.w } : { ...c, y: 1 - c.y - c.h };
 }
 
 export interface Geometry {
