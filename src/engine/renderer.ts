@@ -19,10 +19,15 @@ export interface Renderer {
   frameSize(snapshot: EditSnapshot): { w: number; h: number };
   hasImage: boolean;
   limits: { maxTextureSize: number };
-  destroy(): void;
+  // loseContext default false: um canvas com contexto perdido não pode ser reaproveitado
+  // (React StrictMode roda setup→cleanup→setup no MESMO elemento em dev). Passe true só em
+  // renderer offscreen descartável (ex.: thumbnails da T5), onde o canvas nunca é reusado.
+  destroy(opts?: { loseContext?: boolean }): void;
 }
 
 // --- mat3 column-major (layout do uniformMatrix3fv), zero alocação por frame ---
+// seguro só porque render() é síncrono: nenhuma outra chamada pode reentrar e ler M_OUT/M_TMP
+// no meio de uma composição (sem await, sem callback assíncrono entre loadIdentity() e o uso final).
 type Mat3 = Float32Array;
 const M_OUT: Mat3 = new Float32Array(9); // resultado final reutilizado (vai direto pro uniformMatrix3fv)
 const M_TMP: Mat3 = new Float32Array(9);
@@ -218,12 +223,12 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
 
     frameSize,
 
-    destroy() {
+    destroy(opts?: { loseContext?: boolean }) {
       if (!gl) return;
       if (tex) gl.deleteTexture(tex);
       if (quad) gl.deleteBuffer(quad);
       if (prog) gl.deleteProgram(prog);
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      if (opts?.loseContext) gl.getExtension('WEBGL_lose_context')?.loseContext();
       tex = null; quad = null; prog = null; gl = null;
     },
   };
