@@ -542,6 +542,17 @@ Registrar keystore+senha na memória global (`Acesso Keystore PicMax.md`), como 
 
 ---
 
+### Task 13: Atualização silenciosa in-app + verificação no rodapé
+
+**Files:** Create: `src/update/updater.ts`, componente de rodapé na Home; Modify: plugin Kotlin (instalador) conforme a skill
+
+- [ ] **Step 1: Invocar a skill `skill-wbs-instalacao-silenciosa-app` (Caminho A — Capacitor Android)** e seguir o passo a passo dela: hospedagem do APK + `version.json` (mesmo padrão dos outros apps do Weslley), download in-app com barra de progresso e chamada do instalador do sistema (FileProvider + `ACTION_VIEW`/PackageInstaller).
+- [ ] **Step 2: Rodapé na Home** — mostra `v{versão atual}` (de `package.json`/BuildConfig) + botão "Verificar atualização": consulta o `version.json` remoto; se houver mais nova → modal com changelog e botão Atualizar (download + instala); se não → toast "Você está na versão mais recente". Checagem automática silenciosa ao abrir o app (sem bloquear; só badge no rodapé se houver update).
+- [ ] **Step 3: Verificar em device** — instalar APK v1.0.0, publicar v1.0.1, rodapé acusa update, atualizar in-app sem ir a navegador/loja.
+- [ ] **Step 4: Commit** — `feat(update): atualização in-app com verificação no rodapé`
+
+---
+
 ## Self-review (feito)
 
 - **Cobertura da spec:** básico (T6), ajustes (T4), anotações (T7), filtros+intensidade (T5), melhorar 2 modos (T9/T10), modelos (T11), export/share (T8), erros (T12), critérios de sucesso (T12.4). ✓
