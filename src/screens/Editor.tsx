@@ -48,12 +48,15 @@ function isNeutralSnapshot(s: EditSnapshot): boolean {
   );
 }
 
-// Antes/depois (T12): segurar o dedo no canvas por >=200ms mostra a foto com o snapshot neutro da
+// Antes/depois (v1.1): TAP curto no canvas ALTERNA entre a edição e a foto com o snapshot neutro da
 // base ATUAL (geometria/ajustes/filtro/anotações no default, mas a MESMA base — a textura já
-// carregada no renderer não muda). baseVersion não influencia o render() do WebGL em si (a textura
-// já está fixada via setImage; o campo só existe pro Editor/App saberem QUAL bitmap carregar) — mantido
-// aqui só por completude semântica ("snapshot neutro da base atual", conforme o plano).
-const HOLD_DELAY_MS = 200;
+// carregada no renderer não muda; substituiu o hold-to-compare da v1.0). Tap = pointerdown+up do
+// MESMO ponteiro em <TAP_MAX_MS com deslocamento <TAP_MAX_PX — um arraste ou toque longo nunca
+// alterna, então nenhum gesto futuro de pan/zoom no canvas conflita com este. baseVersion não
+// influencia o render() do WebGL em si (a textura já está fixada via setImage; o campo só existe pro
+// Editor/App saberem QUAL bitmap carregar) — mantido por completude semântica.
+const TAP_MAX_MS = 300;
+const TAP_MAX_PX = 10;
 function neutralSnapshotOfBase(baseVersion: number): EditSnapshot {
   return { ...initialSnapshot(), baseVersion };
 }
@@ -142,14 +145,13 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   const [presetName, setPresetName] = useState('');
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetsVersion, setPresetsVersion] = useState(0);
-  // Antes/depois (T12): `showOriginal` true enquanto o dedo segura o canvas por >=HOLD_DELAY_MS fora
-  // do modo Cortar/Anotar (ver handleHoldStart). holdTimerRef guarda o setTimeout PENDENTE (zerado no
-  // próprio disparo — ver handleHoldStart — e no cancelamento) pra nunca sobrar um id "morto" lido como
-  // "ainda em andamento". holdPointerIdRef guarda o pointerId que INICIOU o hold (review, fix multi-touch):
-  // handleHoldEnd só reage ao MESMO ponteiro — um 2º dedo pousando/saindo na tela não cancela o hold do 1º.
+  // Antes/depois (v1.1): `showOriginal` alterna a cada TAP no canvas fora do modo Cortar/Anotar-ativo
+  // (ver handleTapStart/handleTapEnd). tapRef guarda o gesto candidato em andamento (pointerId que
+  // começou + posição/hora do pointerdown); um 2º dedo pousando no meio CANCELA o candidato (dois
+  // dedos = gesto de outra natureza, nunca um tap). Sair do modo original é automático em qualquer
+  // ação de edição — ver dispatchEdit abaixo.
   const [showOriginal, setShowOriginal] = useState(false);
-  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const holdPointerIdRef = useRef<number | null>(null);
+  const tapRef = useRef<{ pointerId: number; x: number; y: number; t: number } | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -211,9 +213,9 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     [cropMode, history.present],
   );
 
-  // Antes/depois (T12): enquanto `showOriginal`, substitui o snapshot renderizado pelo neutro da base
-  // atual (ver neutralSnapshotOfBase acima) — independente do modo Cortar, já que o hold-gesture é
-  // desabilitado nesse modo (ver handleHoldStart). useMemo pelo mesmo motivo do displaySnapshot: manter
+  // Antes/depois: enquanto `showOriginal`, substitui o snapshot renderizado pelo neutro da base
+  // atual (ver neutralSnapshotOfBase acima) — independente do modo Cortar, já que o tap-gesture é
+  // desabilitado nesse modo (ver handleTapStart). useMemo pelo mesmo motivo do displaySnapshot: manter
   // referência estável fora do instante em que showOriginal/displaySnapshot de fato mudam.
   const renderSnapshot: EditSnapshot = useMemo(
     () => (showOriginal ? neutralSnapshotOfBase(history.present.baseVersion) : displaySnapshot),
@@ -229,41 +231,49 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     return () => cancelAnimationFrame(raf);
   }, [renderSnapshot]);
 
-  // Solta o hold em qualquer desmontagem/troca de imagem (ex.: a IA troca a base enquanto o dedo
-  // segurava — improvável, já que o modal da IA bloqueia a tela, mas defensivo e sem custo).
-  useEffect(() => {
-    return () => {
-      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
-    };
-  }, []);
-
-  // Antes/depois: pointerdown fora do modo Cortar/Anotar (ferramenta ativa) inicia o timer; só troca
-  // pra "Original" se o MESMO dedo ainda estiver na tela HOLD_DELAY_MS depois (um toque rápido não deve
-  // disparar o hint por 1 frame). setPointerCapture (review, fix): garante que pointerup/cancel deste
-  // MESMO ponteiro sempre chegam neste elemento, mesmo que o dedo arraste pra fora do canvas antes de
-  // soltar — sem isso, um drag rápido pra fora perderia o onPointerUp e o hold ficaria "preso" em
-  // showOriginal=true até o onPointerLeave (que só dispara na saída, não cobre soltar já fora).
-  // holdPointerIdRef trava o gesto no PRIMEIRO dedo: handleHoldEnd ignora eventos de um pointerId
-  // diferente (2º dedo pousando ou saindo não interfere no hold do 1º — mesma disciplina de
-  // CropOverlay/AnnotationCanvas, que já filtram por pointerId nos próprios gestos).
-  function handleHoldStart(e: ReactPointerEvent<HTMLDivElement>) {
-    if (cropMode || (activeTab === 'anotar' && annotateTool !== null)) return;
-    if (holdPointerIdRef.current !== null) return; // hold já em andamento (outro dedo) — ignora
-    holdPointerIdRef.current = e.pointerId;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    holdTimerRef.current = setTimeout(() => {
-      holdTimerRef.current = null; // dispara: não sobra timer "pendente" — só o hold ativo, até o pointerup
-      setShowOriginal(true);
-    }, HOLD_DELAY_MS);
-  }
-  function handleHoldEnd(e: ReactPointerEvent<HTMLDivElement>) {
-    if (holdPointerIdRef.current !== e.pointerId) return; // não é o dedo que iniciou o hold — ignora
-    holdPointerIdRef.current = null;
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
+  // Sai do modo "Original" automaticamente em QUALQUER ação de edição (mexer em slider dispara
+  // 'preview', trocar filtro/aplicar modelo dispara 'set', undo/redo idem) — o usuário sempre volta a
+  // ver o que está editando. Wrapper usado em TODOS os pontos de dispatch do Editor e passado aos
+  // painéis no lugar do dispatch cru (setState com o mesmo valor é bail-out barato do React — não
+  // re-renderiza à toa durante um arraste de slider). O hook de dev __picmaxDispatch continua com o
+  // dispatch cru de propósito: ele injeta estado por fora da UI (testes), sem semântica de "edição".
+  function dispatchEdit(action: EditAction) {
     setShowOriginal(false);
+    dispatch(action);
+  }
+
+  // Antes/depois: pointerdown fora do modo Cortar/Anotar (ferramenta ativa) registra o candidato a
+  // tap; o pointerup do MESMO ponteiro decide — <TAP_MAX_MS e deslocamento <TAP_MAX_PX alternam o
+  // modo original, qualquer outra coisa é ignorada (arraste/hold não alternam). setPointerCapture:
+  // garante que pointerup/cancel deste MESMO ponteiro sempre chegam neste elemento, mesmo que o dedo
+  // arraste pra fora do canvas antes de soltar (sem isso o candidato ficaria "preso" até o próximo
+  // toque). Um 2º dedo pousando cancela o candidato: dois dedos nunca são um tap — mesma disciplina
+  // de CropOverlay/AnnotationCanvas, que filtram por pointerId nos próprios gestos.
+  function handleTapStart(e: ReactPointerEvent<HTMLDivElement>) {
+    if (cropMode || (activeTab === 'anotar' && annotateTool !== null)) return;
+    if (tapRef.current !== null) {
+      tapRef.current = null; // 2º dedo no meio do gesto: não é tap — cancela o candidato
+      return;
+    }
+    tapRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // ponteiro já não está mais ativo (ex.: evento sintético em teste, ou up processado antes) —
+      // sem captura o tap ainda funciona quando o dedo solta em cima do canvas; só perde o caso
+      // "soltar fora" (que de todo jeito não seria um tap válido pela distância).
+    }
+  }
+  function handleTapEnd(e: ReactPointerEvent<HTMLDivElement>) {
+    const tap = tapRef.current;
+    if (!tap || tap.pointerId !== e.pointerId) return; // não é o dedo que iniciou — ignora
+    tapRef.current = null;
+    const dt = performance.now() - tap.t;
+    const dist = Math.hypot(e.clientX - tap.x, e.clientY - tap.y);
+    if (dt < TAP_MAX_MS && dist < TAP_MAX_PX) setShowOriginal((v) => !v);
+  }
+  function handleTapCancel(e: ReactPointerEvent<HTMLDivElement>) {
+    if (tapRef.current?.pointerId === e.pointerId) tapRef.current = null;
   }
 
   // Resultado da IA (T10): acrescenta a base nova ao array do App e troca o baseVersion no MESMO
@@ -272,7 +282,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   function handleNewBase(img: LoadedImage) {
     const newIndex = bases.length;
     onAddBase(img);
-    dispatch({ type: 'set', patch: { baseVersion: newIndex } });
+    dispatchEdit({ type: 'set', patch: { baseVersion: newIndex } });
   }
 
   // Aplicar modelo (T11): 1 dispatch 'set' com adjustments+filter do modelo — 1 entrada de histórico,
@@ -282,7 +292,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // do schema de Adjustments (campo novo adicionado depois) chegaria aqui sem essa chave — sem o
   // merge, o slider correspondente leria `undefined` (input não-controlado / NaN no render).
   function handleApplyPreset(preset: EditPreset) {
-    dispatch({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter: preset.filter } });
+    dispatchEdit({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter: preset.filter } });
     setToast({ text: 'Modelo aplicado ✓', kind: 'ok' });
   }
 
@@ -313,7 +323,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
       if (!window.confirm('As anotações serão removidas. Continuar?')) return; // cancelou: aborta, segue no modo crop
       patch.annotations = [];
     }
-    dispatch({ type: 'set', patch });
+    dispatchEdit({ type: 'set', patch });
     setCropMode(false);
   }
 
@@ -434,7 +444,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
           data-testid="undo"
           aria-label="Desfazer"
           disabled={cropMode || history.past.length === 0}
-          onClick={() => dispatch({ type: 'undo' })}
+          onClick={() => dispatchEdit({ type: 'undo' })}
         >
           ↶
         </button>
@@ -444,7 +454,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
           data-testid="redo"
           aria-label="Refazer"
           disabled={cropMode || history.future.length === 0}
-          onClick={() => dispatch({ type: 'redo' })}
+          onClick={() => dispatchEdit({ type: 'redo' })}
         >
           ↷
         </button>
@@ -527,10 +537,9 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
       <div
         className="editor-canvas-wrap"
         ref={canvasWrapRef}
-        onPointerDown={handleHoldStart}
-        onPointerUp={handleHoldEnd}
-        onPointerCancel={handleHoldEnd}
-        onPointerLeave={handleHoldEnd}
+        onPointerDown={handleTapStart}
+        onPointerUp={handleTapEnd}
+        onPointerCancel={handleTapCancel}
       >
         {engineError && (
           <p className="editor-error" data-testid="engine-error">
@@ -538,11 +547,11 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
           </p>
         )}
         <canvas ref={canvasRef} className="editor-canvas" data-testid="canvas" />
-        {/* Antes/depois (T12): hint pequeno enquanto showOriginal — pointer-events:none (CSS) pra
-            nunca interceptar o próprio gesto que o mostra. */}
+        {/* Antes/depois: hint enquanto showOriginal — pointer-events:none (CSS) pra nunca
+            interceptar o próprio tap que alterna o modo. */}
         {showOriginal && (
           <span className="original-hint" data-testid="original-hint">
-            Original
+            Original — toque para voltar
           </span>
         )}
         {showStraightenGrid && <StraightenGrid canvasRef={canvasRef} containerRef={canvasWrapRef} />}
@@ -564,7 +573,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
             canvasRef={canvasRef}
             containerRef={canvasWrapRef}
             present={history.present}
-            dispatch={dispatch}
+            dispatch={dispatchEdit}
             enabled={activeTab === 'anotar' && annotateTool !== null}
             tool={annotateTool}
             color={annotateColor}
@@ -587,16 +596,16 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
             {activeTab === 'basico' ? (
               <BasicPanel
                 present={history.present}
-                dispatch={dispatch}
-                onEnterCrop={() => setCropMode(true)}
+                dispatch={dispatchEdit}
+                onEnterCrop={() => { setShowOriginal(false); setCropMode(true); }}
                 onStraightenDragChange={setShowStraightenGrid}
               />
             ) : activeTab === 'ajustes' ? (
-              <AdjustPanel present={history.present} dispatch={dispatch} />
+              <AdjustPanel present={history.present} dispatch={dispatchEdit} />
             ) : activeTab === 'filtros' ? (
               <FilterPanel
                 present={history.present}
-                dispatch={dispatch}
+                dispatch={dispatchEdit}
                 image={image}
                 onApplyPreset={handleApplyPreset}
                 presetsVersion={presetsVersion}
@@ -604,7 +613,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
             ) : activeTab === 'anotar' ? (
               <AnnotatePanel
                 present={history.present}
-                dispatch={dispatch}
+                dispatch={dispatchEdit}
                 tool={annotateTool}
                 onToolChange={setAnnotateTool}
                 color={annotateColor}
@@ -613,7 +622,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
                 onSizeChange={setAnnotateSize}
               />
             ) : (
-              <EnhancePanel present={history.present} dispatch={dispatch} image={image} onNewBase={handleNewBase} />
+              <EnhancePanel present={history.present} dispatch={dispatchEdit} image={image} onNewBase={handleNewBase} />
             )}
           </div>
 
@@ -624,7 +633,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
                 type="button"
                 className={`editor-tab${activeTab === tab.id ? ' active' : ''}`}
                 data-testid={`tab-${tab.id}`}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => { setShowOriginal(false); setActiveTab(tab.id); }}
               >
                 {tab.label}
               </button>
