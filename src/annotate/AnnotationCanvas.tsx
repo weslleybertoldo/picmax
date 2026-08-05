@@ -35,9 +35,17 @@ const MOVE_THROTTLE = 0.003; // spec: só adiciona ponto ao stroke se moveu >0.3
 const MIN_SHAPE_DIST = 0.01; // spec: forma com <1% de distância entre from/to é descartada ao soltar
 
 type Point = { x: number; y: number };
+// Snapshot de tool/color/size no MOMENTO do pointerdown (spec review): `tool`/`color`/`size` são props
+// VIVAS do Editor (mudam a qualquer momento via AnnotatePanel) — sem congelar no início do gesto, um
+// 2º dedo trocando cor/ferramenta no painel ENQUANTO este traço está em andamento faria o commit final
+// usar a cor/ferramenta ERRADA (a de quando soltou, não a de quando começou). Pior ainda pra forma:
+// trocar pra 'pen'/'text'/null no meio deixava `SHAPE_TOOL[tool]` undefined, salvando `shape:
+// undefined` (drawAnnotations cai no último `else` = ellipse, silenciosamente errado). Por isso o Drag
+// carrega sua PRÓPRIA cópia de color/size/erase (ou shape) — resolvida 1x no pointerdown — e
+// move/up/commit leem só do `drag`, nunca mais das props ao vivo.
 type Drag =
-  | { kind: 'stroke'; pointerId: number; points: Point[] }
-  | { kind: 'shape'; pointerId: number; from: Point; to: Point };
+  | { kind: 'stroke'; pointerId: number; points: Point[]; color: string; size: number; erase: boolean }
+  | { kind: 'shape'; pointerId: number; from: Point; to: Point; color: string; size: number; shape: 'arrow' | 'rect' | 'ellipse' | 'line' };
 
 export interface AnnotationCanvasProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -105,11 +113,12 @@ export default function AnnotationCanvas({
     }
     e.currentTarget.setPointerCapture(e.pointerId);
     if (tool === 'pen' || tool === 'eraser') {
-      dragRef.current = { kind: 'stroke', pointerId: e.pointerId, points: [p] };
-      setLiveDraft({ kind: 'stroke', points: [p], color, size, erase: tool === 'eraser' });
+      const erase = tool === 'eraser';
+      dragRef.current = { kind: 'stroke', pointerId: e.pointerId, points: [p], color, size, erase };
+      setLiveDraft({ kind: 'stroke', points: [p], color, size, erase });
     } else {
       const shape = SHAPE_TOOL[tool]!;
-      dragRef.current = { kind: 'shape', pointerId: e.pointerId, from: p, to: p };
+      dragRef.current = { kind: 'shape', pointerId: e.pointerId, from: p, to: p, color, size, shape };
       setLiveDraft({ kind: 'shape', shape, from: p, to: p, color, size });
     }
   }
@@ -117,33 +126,36 @@ export default function AnnotationCanvas({
   function onPointerMove(e: ReactPointerEvent) {
     const drag = dragRef.current;
     // 2º dedo (pointerId diferente do que iniciou o gesto) não interfere no drag ativo — mesma regra
-    // do CropOverlay.
+    // do CropOverlay. Usa SÓ os campos do próprio `drag` (snapshot do pointerdown), nunca as props
+    // `tool`/`color`/`size` ao vivo — ver comentário no tipo Drag acima.
     if (!drag || e.pointerId !== drag.pointerId) return;
     const p = fractionOf(e);
     if (drag.kind === 'stroke') {
       const last = drag.points[drag.points.length - 1];
       if (Math.hypot(p.x - last.x, p.y - last.y) < MOVE_THROTTLE) return; // throttle: exige >0.3% de deslocamento
       drag.points.push(p);
-      setLiveDraft({ kind: 'stroke', points: [...drag.points], color, size, erase: tool === 'eraser' });
+      setLiveDraft({ kind: 'stroke', points: [...drag.points], color: drag.color, size: drag.size, erase: drag.erase });
     } else {
       drag.to = p;
-      setLiveDraft({ kind: 'shape', shape: SHAPE_TOOL[tool!]!, from: drag.from, to: p, color, size });
+      setLiveDraft({ kind: 'shape', shape: drag.shape, from: drag.from, to: p, color: drag.color, size: drag.size });
     }
   }
 
-  // Soltura normal: comita a anotação em progresso como 1 entrada de histórico.
+  // Soltura normal: comita a anotação em progresso como 1 entrada de histórico. Cor/espessura/tipo de
+  // forma vêm do SNAPSHOT capturado no pointerdown (drag.color/size/erase/shape) — não das props ao
+  // vivo, que podem já ter mudado se um 2º dedo tocou o AnnotatePanel durante o gesto.
   function onPointerUp(e: ReactPointerEvent) {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) return;
     dragRef.current = null;
     setLiveDraft(null);
     if (drag.kind === 'stroke') {
-      const annotation: Annotation = { kind: 'stroke', points: drag.points, color, size, erase: tool === 'eraser' };
+      const annotation: Annotation = { kind: 'stroke', points: drag.points, color: drag.color, size: drag.size, erase: drag.erase };
       dispatch({ type: 'set', patch: { annotations: [...present.annotations, annotation] } });
     } else {
       // distância mínima (spec): gesto ínfimo (quase um toque só) descarta a forma, sem dispatch.
       if (Math.hypot(drag.to.x - drag.from.x, drag.to.y - drag.from.y) < MIN_SHAPE_DIST) return;
-      const annotation: Annotation = { kind: 'shape', shape: SHAPE_TOOL[tool!]!, from: drag.from, to: drag.to, color, size };
+      const annotation: Annotation = { kind: 'shape', shape: drag.shape, from: drag.from, to: drag.to, color: drag.color, size: drag.size };
       dispatch({ type: 'set', patch: { annotations: [...present.annotations, annotation] } });
     }
   }
