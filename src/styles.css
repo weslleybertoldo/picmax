@@ -77,6 +77,12 @@ button {
   border: 1px solid var(--border);
   color: var(--text);
 }
+.btn-secondary.active {
+  border-color: transparent;
+  border-image: var(--brand-gradient) 1;
+  color: var(--text);
+  font-weight: 700;
+}
 .btn-icon {
   height: 44px;
   width: 44px;
@@ -402,4 +408,113 @@ input[type='range']::-moz-range-thumb {
   padding: 0 12px;
   font-size: 13px;
   flex: 0 0 auto;
+}
+
+/* ---------- BasicPanel ---------- */
+.basic-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.basic-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  padding-bottom: 6px;
+}
+.basic-actions .btn {
+  height: 48px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.basic-resize {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.basic-resize-chips {
+  display: flex;
+  gap: 8px;
+}
+.basic-chip {
+  flex: 1;
+  height: 40px;
+  font-size: 13px;
+  padding: 0 8px;
+}
+.basic-resize-hint {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ---------- Grade do Endireitar (guia visual durante o arraste, some ao soltar) ---------- */
+.straighten-grid {
+  position: absolute;
+  pointer-events: none;
+}
+.straighten-grid-line {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.55);
+}
+.straighten-grid-v1 { left: 33.333%; top: 0; bottom: 0; width: 1px; }
+.straighten-grid-v2 { left: 66.666%; top: 0; bottom: 0; width: 1px; }
+.straighten-grid-h1 { top: 33.333%; left: 0; right: 0; height: 1px; }
+.straighten-grid-h2 { top: 66.666%; left: 0; right: 0; height: 1px; }
+
+/* ---------- Modo Cortar (CropOverlay) ---------- */
+.crop-overlay {
+  position: absolute;
+  touch-action: none;
+}
+.crop-rect {
+  position: absolute;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  touch-action: none;
+  cursor: move;
+}
+.crop-handle {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+.crop-handle::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  border: 3px solid #fff;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.2);
+}
+.crop-handle-tl { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle-br { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-handle-tr { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-handle-bl { left: 0; top: 100%; cursor: nesw-resize; }
+
+.crop-mode-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.crop-presets-row {
+  display: flex;
+  gap: 8px;
+}
+.crop-preset {
+  flex: 1;
+  height: 40px;
+  font-size: 13px;
+}
+.crop-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.crop-mode-btn {
+  flex: 1;
+  height: 44px;
 }

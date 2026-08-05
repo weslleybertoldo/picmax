@@ -1,10 +1,48 @@
-// src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (Ajustes e Filtros funcionais)
-import { useEffect, useReducer, useRef, useState } from 'react';
+// src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (Básico, Ajustes e Filtros
+// funcionais) + overlay de crop / grade de endireitar sobre o canvas
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
 import { createRenderer, type Renderer } from '../engine/renderer';
-import { editReducer, initialSnapshot } from '../state/editStack';
+import { editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
+import BasicPanel from '../tools/BasicPanel';
+import CropOverlay from '../tools/CropOverlay';
 import AdjustPanel from '../tools/AdjustPanel';
 import FilterPanel from '../tools/FilterPanel';
+
+interface CanvasBox { left: number; top: number; width: number; height: number }
+
+// Box CSS do canvas em px, relativo a `containerRef` — MESMO cálculo de src/tools/CropOverlay.tsx
+// (cópia intencional, não exportada de lá: um arquivo que exporta um componente E um hook dispara o
+// warning de lint react/only-export-components/Fast Refresh; ambos os usos são pequenos e locais).
+// O canvas é sempre dimensionado (atributos width/height) no aspecto exato do frame, e o CSS
+// (max-width/max-height:100% + width/height:auto) escala esse box mantendo a proporção.
+function useCanvasBox(
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  containerRef: RefObject<HTMLElement | null>,
+): CanvasBox | null {
+  const [box, setBox] = useState<CanvasBox | null>(null);
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+    function update() {
+      if (!canvas || !container) return;
+      const c = canvas.getBoundingClientRect();
+      const p = container.getBoundingClientRect();
+      setBox({ left: c.left - p.left, top: c.top - p.top, width: c.width, height: c.height });
+    }
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(canvas);
+    ro.observe(container);
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [canvasRef, containerRef]);
+  return box;
+}
 
 export interface EditorProps {
   image: LoadedImage;
@@ -20,8 +58,36 @@ const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'melhorar', label: 'Melhorar' },
 ];
 
+// Grade 3x3 sobreposta ao canvas enquanto o slider Endireitar do BasicPanel está sendo arrastado (some
+// ao soltar) — mesmo cálculo de box do CropOverlay (o canvas é sempre proporcional ao frame; ver
+// comentário no topo de CropOverlay.tsx). `pointer-events:none`: é só um guia visual, nunca captura o
+// gesto do slider (que está em outro elemento, no painel abaixo do canvas).
+function StraightenGrid({
+  canvasRef,
+  containerRef,
+}: {
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  containerRef: RefObject<HTMLDivElement | null>;
+}) {
+  const box = useCanvasBox(canvasRef, containerRef);
+  if (!box) return null;
+  return (
+    <div
+      className="straighten-grid"
+      data-testid="straighten-grid"
+      style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+    >
+      <div className="straighten-grid-line straighten-grid-v1" />
+      <div className="straighten-grid-line straighten-grid-v2" />
+      <div className="straighten-grid-line straighten-grid-h1" />
+      <div className="straighten-grid-line straighten-grid-h2" />
+    </div>
+  );
+}
+
 export default function Editor({ image, onBack }: EditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasWrapRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const [history, dispatch] = useReducer(editReducer, undefined, () => ({
     past: [],
@@ -30,6 +96,18 @@ export default function Editor({ image, onBack }: EditorProps) {
   }));
   const [activeTab, setActiveTab] = useState<TabId>('ajustes');
   const [engineError, setEngineError] = useState<string | null>(null);
+  // Modo Cortar (T6): substitui a toolbar de abas por Cancelar/Aplicar e trava undo/redo enquanto ativo.
+  const [cropMode, setCropMode] = useState(false);
+  // Grade 3x3 visível só durante o arraste do slider Endireitar (ver StraightenGrid acima).
+  const [showStraightenGrid, setShowStraightenGrid] = useState(false);
+
+  // Hook de dev (T6, só em build DEV — tree-shaken em produção via import.meta.env.DEV): permite
+  // injetar `annotations` fake por fora da UI (T7 ainda não existe) pra validar a guarda de
+  // "anotações serão removidas" em Girar 90°/Aplicar crop, sem precisar da aba Anotar já implementada.
+  // Mesmo padrão de "só em dev" já usado no botão de imagem de teste (Home.tsx).
+  if (import.meta.env.DEV) {
+    (window as unknown as { __picmaxDispatch?: (action: EditAction) => void }).__picmaxDispatch = dispatch;
+  }
 
   // Cria o renderer 1x por imagem montada. destroy() sem opts (loseContext=false) — StrictMode roda
   // setup→cleanup→setup no MESMO <canvas> em dev, e um contexto perdido inviabilizaria o 2º setup.
@@ -51,14 +129,35 @@ export default function Editor({ image, onBack }: EditorProps) {
     };
   }, [image]);
 
-  // Render coalescido com rAF: se `present` mudar de novo antes do frame disparar, o cleanup
+  // Enquanto no modo Cortar, renderiza o snapshot SEM o crop atual — o overlay sempre opera sobre o
+  // frame ÍNTEGRO (pós rotate90/flip/straighten), permitindo reexpandir uma área já recortada (ver
+  // comentário no topo de CropOverlay.tsx). Fora do modo Cortar, renderiza `history.present` normalmente.
+  // useMemo (não um const recomputado toda render): fora do modo crop, mantém a MESMA referência de
+  // `history.present` entre renders não relacionados — senão o efeito de render abaixo disparia um rAF
+  // a cada render do Editor (ex.: qualquer state local mudando), não só quando o snapshot muda de fato.
+  const displaySnapshot: EditSnapshot = useMemo(
+    () => (cropMode ? { ...history.present, geometry: { ...history.present.geometry, crop: null } } : history.present),
+    [cropMode, history.present],
+  );
+
+  // Render coalescido com rAF: se o snapshot exibido mudar de novo antes do frame disparar, o cleanup
   // cancela o rAF pendente e agenda um novo — nunca desenha um snapshot já obsoleto.
   useEffect(() => {
     const renderer = rendererRef.current;
     if (!renderer) return;
-    const raf = requestAnimationFrame(() => renderer.render(history.present));
+    const raf = requestAnimationFrame(() => renderer.render(displaySnapshot));
     return () => cancelAnimationFrame(raf);
-  }, [history.present]);
+  }, [displaySnapshot]);
+
+  function handleCropApply(crop: CropRect) {
+    const patch: Partial<EditSnapshot> = { geometry: { ...history.present.geometry, crop } };
+    if (history.present.annotations.length > 0) {
+      if (!window.confirm('As anotações serão removidas. Continuar?')) return; // cancelou: aborta, segue no modo crop
+      patch.annotations = [];
+    }
+    dispatch({ type: 'set', patch });
+    setCropMode(false);
+  }
 
   return (
     <div className="editor">
@@ -71,7 +170,7 @@ export default function Editor({ image, onBack }: EditorProps) {
           className="btn btn-icon"
           data-testid="undo"
           aria-label="Desfazer"
-          disabled={history.past.length === 0}
+          disabled={cropMode || history.past.length === 0}
           onClick={() => dispatch({ type: 'undo' })}
         >
           ↶
@@ -81,7 +180,7 @@ export default function Editor({ image, onBack }: EditorProps) {
           className="btn btn-icon"
           data-testid="redo"
           aria-label="Refazer"
-          disabled={history.future.length === 0}
+          disabled={cropMode || history.future.length === 0}
           onClick={() => dispatch({ type: 'redo' })}
         >
           ↷
@@ -89,38 +188,58 @@ export default function Editor({ image, onBack }: EditorProps) {
         <div className="editor-topbar-spacer" />
       </div>
 
-      <div className="editor-canvas-wrap">
+      <div className="editor-canvas-wrap" ref={canvasWrapRef}>
         {engineError && (
           <p className="editor-error" data-testid="engine-error">
             {engineError}
           </p>
         )}
         <canvas ref={canvasRef} className="editor-canvas" data-testid="canvas" />
+        {showStraightenGrid && <StraightenGrid canvasRef={canvasRef} containerRef={canvasWrapRef} />}
       </div>
 
-      <div className="editor-panel">
-        {activeTab === 'ajustes' ? (
-          <AdjustPanel present={history.present} dispatch={dispatch} />
-        ) : activeTab === 'filtros' ? (
-          <FilterPanel present={history.present} dispatch={dispatch} image={image} />
-        ) : (
-          <p className="panel-placeholder">Em breve</p>
-        )}
-      </div>
+      {cropMode ? (
+        <CropOverlay
+          canvasRef={canvasRef}
+          containerRef={canvasWrapRef}
+          initialCrop={history.present.geometry.crop}
+          onCancel={() => setCropMode(false)}
+          onApply={handleCropApply}
+        />
+      ) : (
+        <>
+          <div className="editor-panel">
+            {activeTab === 'basico' ? (
+              <BasicPanel
+                present={history.present}
+                dispatch={dispatch}
+                onEnterCrop={() => setCropMode(true)}
+                onStraightenDragChange={setShowStraightenGrid}
+              />
+            ) : activeTab === 'ajustes' ? (
+              <AdjustPanel present={history.present} dispatch={dispatch} />
+            ) : activeTab === 'filtros' ? (
+              <FilterPanel present={history.present} dispatch={dispatch} image={image} />
+            ) : (
+              <p className="panel-placeholder">Em breve</p>
+            )}
+          </div>
 
-      <div className="editor-tabs">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`editor-tab${activeTab === tab.id ? ' active' : ''}`}
-            data-testid={`tab-${tab.id}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+          <div className="editor-tabs">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`editor-tab${activeTab === tab.id ? ' active' : ''}`}
+                data-testid={`tab-${tab.id}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
