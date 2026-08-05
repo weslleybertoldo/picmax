@@ -10,6 +10,10 @@ import type { LoadedImage } from './io/openImage';
 
 export default function App() {
   const [bases, setBases] = useState<LoadedImage[] | null>(null);
+  // Resolução do export (v1.1): última escolha do usuário no modal do Exportar/Compartilhar
+  // (null = Máxima). Vive AQUI (não no Editor) pra sobreviver a fechar/abrir fotos na MESMA sessão;
+  // de propósito não persiste (sem Preferences) — cada sessão nova volta pra Máxima.
+  const [exportMaxSide, setExportMaxSide] = useState<number | null>(null);
 
   // Fecha TODOS os ImageBitmap ao descartar a sessão de edição (volta pra Home). Bases antigas
   // NUNCA são fechadas durante a edição: undo pode voltar o baseVersion pra qualquer uma delas.
@@ -29,6 +33,8 @@ export default function App() {
           bases={bases}
           onAddBase={(img) => setBases((prev) => (prev ? [...prev, img] : [img]))}
           onBack={handleBack}
+          exportMaxSide={exportMaxSide}
+          onExportMaxSideChange={setExportMaxSide}
         />
       ) : (
         <Home onImage={(img) => setBases([img])} />

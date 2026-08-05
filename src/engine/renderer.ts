@@ -81,7 +81,9 @@ function computeUvMatrix(g: Geometry, texW: number, texH: number): number {
 }
 
 // arredonda o lado maior e deriva o outro do aspecto (evita 1512x1511 em crop 1:1)
-function roundKeepingAspect(w: number, h: number): { w: number; h: number } {
+// exportada (v1.1): o modal de resolução do export (Editor.tsx) usa o MESMO arredondamento pra
+// exibir as dimensões reais de saída de cada opção.
+export function roundKeepingAspect(w: number, h: number): { w: number; h: number } {
   if (!(w > 0) || !(h > 0)) return { w: 1, h: 1 };
   if (w >= h) { const rw = Math.max(1, Math.round(w)); return { w: rw, h: Math.max(1, Math.round((rw * h) / w)) }; }
   const rh = Math.max(1, Math.round(h)); return { w: Math.max(1, Math.round((rh * w) / h)), h: rh };

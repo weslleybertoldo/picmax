@@ -5,7 +5,7 @@ import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { createRenderer, type Renderer } from '../engine/renderer';
+import { createRenderer, roundKeepingAspect, type Renderer } from '../engine/renderer';
 import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import { blobToBase64 } from '../io/blobToBase64';
@@ -67,6 +67,34 @@ export interface EditorProps {
   bases: LoadedImage[];
   onAddBase: (img: LoadedImage) => void;
   onBack: () => void;
+  // Resolução do export (v1.1): última escolha no modal (null = Máxima), lembrada pela sessão no
+  // App — ver comentário em App.tsx.
+  exportMaxSide: number | null;
+  onExportMaxSideChange: (v: number | null) => void;
+}
+
+// Opções do modal de resolução (v1.1): lado MAIOR da saída. Opções maiores que o frame final ficam
+// ocultas (sem upscale); "Máxima (original)" sempre existe e é a pré-selecionada default.
+const EXPORT_SIZE_OPTIONS: Array<{ label: string; value: number }> = [
+  { label: '4K', value: 2160 },
+  { label: 'Full HD', value: 1080 },
+  { label: 'HD', value: 720 },
+];
+
+// Dimensões REAIS de saída do export com a geometria atual: base FULL-RES (image.width/height já
+// orientadas pelo EXIF — ver openImage.ts; a textura do preview é ≤2048 e NÃO serve pra isso),
+// eixos trocados por rotate90 ímpar e fração do crop — mesmo cálculo do renderer.frameSize, mesmo
+// arredondamento (roundKeepingAspect). O clamp de MAX_TEXTURE_SIZE da GPU não entra na exibição
+// (caso raro de foto acima do limite; o exportImage já trata na hora).
+function exportFrameSize(image: LoadedImage, snap: EditSnapshot): { w: number; h: number } {
+  const k = snap.geometry.rotate90 & 3;
+  let w = k % 2 ? image.height : image.width;
+  let h = k % 2 ? image.width : image.height;
+  if (snap.geometry.crop) {
+    w *= snap.geometry.crop.w;
+    h *= snap.geometry.crop.h;
+  }
+  return roundKeepingAspect(w, h);
 }
 
 type TabId = 'basico' | 'ajustes' | 'filtros' | 'anotar' | 'melhorar';
@@ -105,7 +133,7 @@ function StraightenGrid({
   );
 }
 
-export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
+export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExportMaxSideChange }: EditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
@@ -137,6 +165,12 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // (sucesso ou erro, nunca stack trace) — some sozinho depois de 3s (efeito abaixo).
   const [exportBusy, setExportBusy] = useState<'export' | 'share' | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
+  // Modal de resolução (v1.1): Exportar/Compartilhar abrem o modal ANTES de gerar; a escolha vira o
+  // resizeMaxSide da exportação (os chips de Redimensionar da aba Básico saíram — o modal é a fonte
+  // ÚNICA da escolha; geometry.resizeMaxSide continua existindo no snapshot só como veículo do valor
+  // até o exportImage, nunca mais é setado por dispatch).
+  const [exportModal, setExportModal] = useState<'export' | 'share' | null>(null);
+  const [exportChoice, setExportChoice] = useState<number | null>(null);
   // Modelos (T11): modal de nome do "Salvar modelo" + contador que força a seção "Meus modelos" da
   // aba Filtros a reler o storage sem remontar (ela só remonta ao trocar de aba — ver ternário de
   // abas mais abaixo; sem isso, salvar um modelo com a aba Filtros já aberta deixaria a lista velha
@@ -329,17 +363,47 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     setCropMode(false);
   }
 
+  // Modal de resolução (v1.1): dimensões finais do frame FULL-RES pra montar as opções.
+  const frameFull = useMemo(() => exportFrameSize(image, history.present), [image, history.present]);
+  const frameMaxDim = Math.max(frameFull.w, frameFull.h);
+  // opções visíveis: só as MENORES que o frame (sem upscale); Máxima sempre.
+  const visibleSizeOptions = EXPORT_SIZE_OPTIONS.filter((o) => o.value < frameMaxDim);
+
+  function openExportModal(mode: 'export' | 'share') {
+    if (exportBusy) return;
+    // escolha lembrada da sessão só vale se ainda visível pra ESTA imagem (senão volta pra Máxima)
+    const remembered = exportMaxSide !== null && exportMaxSide < frameMaxDim ? exportMaxSide : null;
+    setExportChoice(remembered);
+    setExportModal(mode);
+  }
+
+  function confirmExportModal() {
+    const mode = exportModal;
+    if (!mode) return;
+    setExportModal(null);
+    onExportMaxSideChange(exportChoice); // lembra pra próxima (sessão)
+    if (mode === 'export') void handleExport(exportChoice);
+    else void handleShare(exportChoice);
+  }
+
+  // Snapshot efetivo da exportação: injeta a escolha do modal como resizeMaxSide SEM dispatch
+  // (não entra no histórico — resolução de saída não é uma "edição").
+  function exportSnapshot(maxSide: number | null): EditSnapshot {
+    if (maxSide === null) return history.present;
+    return { ...history.present, geometry: { ...history.present.geometry, resizeMaxSide: maxSide } };
+  }
+
   // Exportar (T8): render full-res via exportImage (geometria+ajustes+filtro+anotações — ver
   // src/io/exportImage.ts) e grava no MediaStore via o plugin nativo. Na plataforma web dev (sem
   // Capacitor nativo, `npm run dev`) não existe MediaStore: baixa o blob como download comum
   // (`<a download>` + Blob URL) — sem isso o botão não teria NENHUM efeito observável fora do device,
   // e é exatamente esse link que permite validar o pipeline de export de ponta a ponta num navegador
   // headless (Playwright intercepta o evento de download), sem precisar de emulador Android.
-  async function handleExport() {
+  async function handleExport(maxSide: number | null) {
     if (exportBusy) return;
     setExportBusy('export');
     try {
-      const blob = await exportImage(image, history.present);
+      const blob = await exportImage(image, exportSnapshot(maxSide));
       if (Capacitor.isNativePlatform()) {
         const base64 = await blobToBase64(blob);
         await ImageEnhancer.saveToGallery({ base64, mime: blob.type });
@@ -367,11 +431,11 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // aparece na galeria) e abre o share sheet do sistema. Só faz sentido em device nativo (Web Share
   // API não suporta `files` de forma confiável e não roda em Chromium headless); erro aqui vira toast,
   // nunca stack trace.
-  async function handleShare() {
+  async function handleShare(maxSide: number | null) {
     if (exportBusy) return;
     setExportBusy('share');
     try {
-      const blob = await exportImage(image, history.present);
+      const blob = await exportImage(image, exportSnapshot(maxSide));
       const base64 = await blobToBase64(blob);
       const { uri } = await Filesystem.writeFile({
         path: exportFileName(blob.type),
@@ -411,6 +475,10 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // real sobre o comportamento anterior (sem listener nenhum, o back saía do app direto).
   const backButtonHandlerRef = useRef<() => void>(() => {});
   backButtonHandlerRef.current = () => {
+    if (exportModal) {
+      setExportModal(null); // v1.1: back físico fecha o modal de resolução (mesma cascata dos demais)
+      return;
+    }
     if (showSaveModal) {
       setShowSaveModal(false);
       return;
@@ -477,7 +545,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
           data-testid="export"
           aria-label="Exportar"
           disabled={cropMode || exportBusy !== null}
-          onClick={handleExport}
+          onClick={() => openExportModal('export')}
         >
           {exportBusy === 'export' ? <span className="spinner" aria-hidden="true" /> : '⬇'} Exportar
         </button>
@@ -487,7 +555,7 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
           data-testid="share"
           aria-label="Compartilhar"
           disabled={cropMode || exportBusy !== null}
-          onClick={handleShare}
+          onClick={() => openExportModal('share')}
         >
           {exportBusy === 'share' ? <span className="spinner" aria-hidden="true" /> : '⤴'}
         </button>
@@ -496,6 +564,61 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
       {toast && (
         <div className={`toast toast-${toast.kind}`} data-testid="toast" role="status">
           {toast.text}
+        </div>
+      )}
+
+      {/* Modal de resolução (v1.1): Máxima sempre presente e pré-selecionada por default; as demais
+          opções mostram as dimensões REAIS de saída e só aparecem quando menores que o frame final
+          (sem upscale). O botão de confirmar repete o verbo da ação que abriu o modal. */}
+      {exportModal && (
+        <div className="text-modal-backdrop" data-testid="export-size-modal">
+          <div className="text-modal">
+            <h3 className="export-size-title">Resolução</h3>
+            <div className="export-size-options">
+              <button
+                type="button"
+                className={`export-size-option${exportChoice === null ? ' active' : ''}`}
+                data-testid="export-size-max"
+                onClick={() => setExportChoice(null)}
+              >
+                <span>Máxima (original)</span>
+                <span className="export-size-dims">
+                  {frameFull.w}×{frameFull.h}
+                </span>
+              </button>
+              {visibleSizeOptions.map((opt) => {
+                const scale = opt.value / frameMaxDim;
+                const dims = roundKeepingAspect(frameFull.w * scale, frameFull.h * scale);
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={`export-size-option${exportChoice === opt.value ? ' active' : ''}`}
+                    data-testid={`export-size-${opt.value}`}
+                    onClick={() => setExportChoice(opt.value)}
+                  >
+                    <span>{opt.label}</span>
+                    <span className="export-size-dims">
+                      {dims.w}×{dims.h}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-modal-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="export-size-cancel"
+                onClick={() => setExportModal(null)}
+              >
+                Cancelar
+              </button>
+              <button type="button" className="btn btn-primary" data-testid="export-size-confirm" onClick={confirmExportModal}>
+                {exportModal === 'export' ? 'Exportar' : 'Compartilhar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

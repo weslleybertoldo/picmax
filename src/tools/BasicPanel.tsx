@@ -1,5 +1,7 @@
-// src/tools/BasicPanel.tsx — girar 90°, espelhar H/V, endireitar, redimensionar (export) e entrar no
-// modo Cortar (o overlay em si vive em CropOverlay.tsx / Editor.tsx).
+// src/tools/BasicPanel.tsx — girar 90°, espelhar H/V, endireitar e entrar no modo Cortar (o overlay
+// em si vive em CropOverlay.tsx / Editor.tsx). Os chips de Redimensionar saíram na v1.1: a escolha
+// de resolução MIGROU pro modal do Exportar/Compartilhar (fonte única do conceito — ver Editor.tsx),
+// que mostra as dimensões reais de saída por opção em vez de um chip fixo desconectado do resultado.
 import { useRef, type Dispatch } from 'react';
 import { mirrorCropRect, rotateCropRect90, type EditAction, type EditSnapshot, type Geometry } from '../state/editStack';
 import { useSliderGesture } from './useSliderGesture';
@@ -12,12 +14,6 @@ export interface BasicPanelProps {
   // (renderizada pelo Editor, que tem acesso ao canvas — ver StraightenGrid em Editor.tsx).
   onStraightenDragChange: (dragging: boolean) => void;
 }
-
-const RESIZE_CHIPS: Array<{ label: string; value: number | null; testId: string }> = [
-  { label: 'Original', value: null, testId: 'original' },
-  { label: '2048px', value: 2048, testId: '2048' },
-  { label: '1080px', value: 1080, testId: '1080' },
-];
 
 // Guarda de anotações: qualquer mudança de GEOMETRIA com anotações ativas limpa `annotations` (após
 // confirmação) — decisão v1 UNIFORME (T7 revisita a decisão inicial da T6, que só cobria Cortar/Girar
@@ -87,11 +83,6 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
       straighten: -g.straighten,
     };
     commitGeometry(next, hasAnnotations);
-  }
-
-  function setResize(value: number | null) {
-    const next: Geometry = { ...liveRef.current, resizeMaxSide: value };
-    commitGeometry(next, false);
   }
 
   const straightenGesture = useSliderGesture<'straighten'>({
@@ -177,25 +168,6 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
         />
       </div>
 
-      <div className="basic-resize" data-testid="basic-resize-row">
-        <div className="slider-row-label">
-          <span>Redimensionar</span>
-        </div>
-        <div className="basic-resize-chips">
-          {RESIZE_CHIPS.map((chip) => (
-            <button
-              key={chip.testId}
-              type="button"
-              className={`btn btn-secondary basic-chip${geometry.resizeMaxSide === chip.value ? ' active' : ''}`}
-              data-testid={`basic-resize-${chip.testId}`}
-              onClick={() => setResize(chip.value)}
-            >
-              {chip.label}
-            </button>
-          ))}
-        </div>
-        <p className="basic-resize-hint">Aplicado ao salvar</p>
-      </div>
     </div>
   );
 }
