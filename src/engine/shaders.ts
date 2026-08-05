@@ -1,14 +1,23 @@
 // src/engine/shaders.ts
 export const VERT = `
-attribute vec2 aPos; varying vec2 vUv;
+attribute vec2 aPos; varying vec2 vUv; varying vec2 vFrameUv;
 uniform mat3 uUvMat; // geometria: rot90/flip/straighten/crop no espaço UV
-void main() { vUv = (uUvMat * vec3((aPos + 1.0) * 0.5, 1.0)).xy; gl_Position = vec4(aPos, 0.0, 1.0); }`;
+void main() {
+  vFrameUv = (aPos + 1.0) * 0.5; // UV do FRAME final (pós-geometria) — vinheta segue o frame, não a textura
+  vUv = (uUvMat * vec3(vFrameUv, 1.0)).xy;
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
 
 export const FRAG = `
-precision highp float; varying vec2 vUv;
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv; varying vec2 vFrameUv;
 uniform sampler2D uImage; uniform vec2 uTexel;
 uniform float uBrightness, uContrast, uSaturation, uExposure, uTemperature, uShadows, uHighlights, uSharpness, uVignette;
-uniform float uFGray, uFSat, uFCon, uFIntensity; uniform vec3 uFGamma, uFGain, uFLift;
+uniform float uFGray, uFSat, uFCon, uFIntensity; uniform vec3 uFGammaInv, uFGain, uFLift;
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 vec3 adjust(vec3 c) {
   c *= pow(2.0, uExposure); c += uBrightness;
@@ -24,7 +33,7 @@ vec3 grade(vec3 c) { // filtro genérico parametrizado
   c = mix(c, vec3(l), uFGray);
   c = mix(vec3(luma(c)), c, uFSat);
   c = (c - 0.5) * (1.0 + uFCon) + 0.5;
-  c = pow(clamp(c, 0.001, 1.0), 1.0 / uFGamma);
+  c = pow(max(c, vec3(0.001)), uFGammaInv); // 1/gamma pré-computado no JS (clamp final já limita o topo)
   c = c * uFGain + uFLift * (1.0 - l);
   return c;
 }
@@ -37,6 +46,6 @@ void main() {
   }
   c = adjust(c);
   if (uFIntensity > 0.0) c = mix(c, grade(c), uFIntensity);
-  c *= 1.0 - uVignette * smoothstep(0.35, 0.75, distance(vUv, vec2(0.5)));
+  c *= 1.0 - uVignette * smoothstep(0.35, 0.75, distance(vFrameUv, vec2(0.5)));
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;

@@ -9,7 +9,7 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   shadows: 0, highlights: 0, sharpness: 0, vignette: 0,
 };
 export interface FilterOp { id: string; intensity: number } // 0..100
-export interface CropRect { x: number; y: number; w: number; h: number } // fração 0..1 do frame pós-rotação
+export interface CropRect { x: number; y: number; w: number; h: number } // x,y = canto superior esquerdo em frações do frame pós-rotação (y cresce pra baixo)
 export interface Geometry {
   rotate90: 0 | 1 | 2 | 3; flipH: boolean; flipV: boolean;
   straighten: number;            // graus -45..45

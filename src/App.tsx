@@ -28,17 +28,25 @@ declare global {
 const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0' };
 
 export default function App() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const holderRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const [snap, setSnap] = useState<EditSnapshot>(initialSnapshot);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // canvas criado por mount: destroy() perde o contexto WebGL, e getContext no MESMO
+    // canvas devolveria o contexto perdido (StrictMode monta 2x em dev)
+    const canvas = document.createElement('canvas');
+    canvas.dataset.testid = 'preview';
+    canvas.style.width = '100%';
+    canvas.style.maxWidth = '512px';
+    canvas.style.background = '#222';
+    holderRef.current!.appendChild(canvas);
     let alive = true;
     let r: Renderer | null = null;
     try {
-      r = createRenderer(canvasRef.current!);
+      r = createRenderer(canvas);
       rendererRef.current = r;
       makeTestBitmap().then((bmp) => {
         if (!alive) return;
@@ -48,7 +56,7 @@ export default function App() {
     } catch (e) {
       setError(String(e));
     }
-    return () => { alive = false; r?.destroy(); rendererRef.current = null; setReady(false); };
+    return () => { alive = false; r?.destroy(); rendererRef.current = null; canvas.remove(); setReady(false); };
   }, []);
 
   useEffect(() => {
@@ -69,7 +77,7 @@ export default function App() {
     <div style={{ maxWidth: 640, margin: '0 auto', padding: 16, fontFamily: 'system-ui, sans-serif' }}>
       <h2 style={{ margin: '0 0 12px' }}>PicMax — harness do engine (Task 3)</h2>
       {error && <p style={{ color: 'red' }} data-testid="engine-error">{error}</p>}
-      <canvas ref={canvasRef} data-testid="preview" style={{ width: '100%', maxWidth: 512, background: '#222' }} />
+      <div ref={holderRef} />
       <div style={row}>
         <label style={{ width: 110 }}>Brilho {snap.adjustments.brightness}</label>
         <input type="range" min={-100} max={100} value={snap.adjustments.brightness}

@@ -1,56 +1,84 @@
 // src/engine/renderer.ts — renderer WebGL1: quad fullscreen + geometria via uUvMat + ajustes/filtro no fragment
 import type { EditSnapshot, Geometry } from '../state/editStack';
-import { filterById } from './filters';
+import { filterById, type FilterDef } from './filters';
 import { FRAG, VERT } from './shaders';
 
 export interface RendererOpts { maxSide?: number }
+
+/**
+ * Contrato:
+ * - crop: frações do frame pós-rot90, origem no canto superior ESQUERDO (y cresce pra baixo, como DOM/anotações)
+ * - flipH/flipV: eixos de TELA (flipH sempre espelha horizontalmente o que se vê, mesmo com rot90 ímpar)
+ * - straighten: graus, positivo = anti-horário na tela; zoom-in interno — NÃO muda frameSize
+ * - snapshot.geometry.resizeMaxSide NÃO é aplicado aqui; o export (Task 8) mapeia ele pra opts.maxSide
+ * - frameSize antes de setImage retorna {w:1,h:1} — cheque hasImage
+ */
 export interface Renderer {
   setImage(bitmap: ImageBitmap): void;
   render(snapshot: EditSnapshot): void;
   frameSize(snapshot: EditSnapshot): { w: number; h: number };
+  hasImage: boolean;
+  limits: { maxTextureSize: number };
   destroy(): void;
 }
 
-// --- helpers mat3 (column-major: m[col*3+row], pronto pro uniformMatrix3fv) ---
-type Mat3 = number[];
-function mul(a: Mat3, b: Mat3): Mat3 { // a·b (aplica b primeiro em vetores-coluna)
-  const o = new Array<number>(9);
-  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++)
-    o[c * 3 + r] = a[r] * b[c * 3] + a[3 + r] * b[c * 3 + 1] + a[6 + r] * b[c * 3 + 2];
-  return o;
-}
-const translate = (tx: number, ty: number): Mat3 => [1, 0, 0, 0, 1, 0, tx, ty, 1];
-const scale = (sx: number, sy: number): Mat3 => [sx, 0, 0, 0, sy, 0, 0, 0, 1];
-const rotate = (rad: number): Mat3 => {
-  const c = Math.cos(rad), s = Math.sin(rad);
-  return [c, s, 0, -s, c, 0, 0, 0, 1];
-};
-const aroundCenter = (m: Mat3): Mat3 => mul(mul(translate(0.5, 0.5), m), translate(-0.5, -0.5));
-
-// uv_tex = flips( rot90( straighten( crop(uv_screen) ) ) )  →  M = Ytex · F · R90 · S · C
-// Ytex: a textura é armazenada com a linha 0 no topo (UNPACK_FLIP_Y_WEBGL é IGNORADO para
-// ImageBitmap, por spec) — o flip final converte o espaço UV y-up pro layout real da textura.
-function uvMatrix(g: Geometry, texW: number, texH: number): Mat3 {
-  let m = aroundCenter(scale(1, -1));
-  if (g.flipH || g.flipV) m = mul(m, aroundCenter(scale(g.flipH ? -1 : 1, g.flipV ? -1 : 1)));
-  const k = g.rotate90 & 3;
-  if (k) { // rotação exata de k·90° em UV ao redor do centro (sem ruído de FP)
-    const c = [1, 0, -1, 0][k], s = [0, 1, 0, -1][k];
-    m = mul(m, aroundCenter([c, s, 0, -s, c, 0, 0, 0, 1]));
+// --- mat3 column-major (layout do uniformMatrix3fv), zero alocação por frame ---
+type Mat3 = Float32Array;
+const M_OUT: Mat3 = new Float32Array(9); // resultado final reutilizado (vai direto pro uniformMatrix3fv)
+const M_TMP: Mat3 = new Float32Array(9);
+function loadIdentity() { M_OUT.fill(0); M_OUT[0] = M_OUT[4] = M_OUT[8] = 1; }
+// M_OUT = M_OUT · [a c tx; b d ty; 0 0 1] — anexa um fator à direita (aplicado ANTES dos acumulados)
+function fac(a: number, b: number, c: number, d: number, tx: number, ty: number) {
+  for (let r = 0; r < 3; r++) {
+    M_TMP[r] = M_OUT[r] * a + M_OUT[3 + r] * b;
+    M_TMP[3 + r] = M_OUT[r] * c + M_OUT[3 + r] * d;
+    M_TMP[6 + r] = M_OUT[r] * tx + M_OUT[3 + r] * ty + M_OUT[6 + r];
   }
+  M_OUT.set(M_TMP);
+}
+const translate = (tx: number, ty: number) => fac(1, 0, 0, 1, tx, ty);
+const scale = (sx: number, sy: number) => fac(sx, 0, 0, sy, 0, 0);
+const rotate = (rad: number) => { const c = Math.cos(rad), s = Math.sin(rad); fac(c, s, -s, c, 0, 0); };
+
+// uv_tex = Ytex( flips( rot90( straighten( crop(uv_screen) ) ) ) ) — resultado escrito em M_OUT.
+// Ytex: a textura guarda a linha 0 no topo (UNPACK_FLIP_Y_WEBGL é IGNORADO p/ ImageBitmap, por spec);
+// o flip final converte o espaço y-up da composição pro layout real da textura.
+// Retorna a escala de cobertura do straighten (>= 1), usada na paridade de nitidez preview/export.
+function computeUvMatrix(g: Geometry, texW: number, texH: number): number {
+  loadIdentity();
+  translate(0.5, 0.5); scale(1, -1); translate(-0.5, -0.5); // Ytex
+  const k = g.rotate90 & 3;
+  // flips em eixos de TELA: com rot90 ímpar, flip horizontal de tela = flip vertical de textura
+  const fx = k % 2 ? g.flipV : g.flipH, fy = k % 2 ? g.flipH : g.flipV;
+  if (fx || fy) { translate(0.5, 0.5); scale(fx ? -1 : 1, fy ? -1 : 1); translate(-0.5, -0.5); }
+  if (k) { // k·90° exatos (sem ruído de FP de cos/sin)
+    const c = [1, 0, -1, 0][k], s = [0, 1, 0, -1][k];
+    translate(0.5, 0.5); fac(c, s, -s, c, 0, 0); translate(-0.5, -0.5);
+  }
+  let cover = 1;
   if (g.straighten) {
     // rotação de -θ em espaço de PIXEL do frame pós-rot90 (senão distorce em imagem não-quadrada),
-    // com escala de cobertura: UV encolhe 1/s → zoom-in na imagem, sem mostrar borda
+    // com cobertura: UV encolhe 1/cover → zoom-in na imagem, sem mostrar borda
     const rad = (g.straighten * Math.PI) / 180;
     const fw = k % 2 ? texH : texW, fh = k % 2 ? texW : texH;
     const ratio = Math.max(fw, fh) / Math.min(fw, fh);
-    const cover = Math.cos(Math.abs(rad)) + ratio * Math.sin(Math.abs(rad));
-    let lin = mul(scale(1 / fw, 1 / fh), mul(rotate(-rad), scale(fw, fh)));
-    lin = mul(scale(1 / cover, 1 / cover), lin);
-    m = mul(m, aroundCenter(lin));
+    cover = Math.cos(Math.abs(rad)) + ratio * Math.sin(Math.abs(rad));
+    translate(0.5, 0.5);
+    scale(1 / cover, 1 / cover); scale(1 / fw, 1 / fh); rotate(-rad); scale(fw, fh);
+    translate(-0.5, -0.5);
   }
-  if (g.crop) m = mul(m, mul(translate(g.crop.x, g.crop.y), scale(g.crop.w, g.crop.h)));
-  return m;
+  if (g.crop) { // crop y-down (origem no topo, como DOM) → converte pro espaço UV y-up da composição
+    translate(g.crop.x, 1 - g.crop.y - g.crop.h);
+    scale(g.crop.w, g.crop.h);
+  }
+  return cover;
+}
+
+// arredonda o lado maior e deriva o outro do aspecto (evita 1512x1511 em crop 1:1)
+function roundKeepingAspect(w: number, h: number): { w: number; h: number } {
+  if (!(w > 0) || !(h > 0)) return { w: 1, h: 1 };
+  if (w >= h) { const rw = Math.max(1, Math.round(w)); return { w: rw, h: Math.max(1, Math.round((rw * h) / w)) }; }
+  const rh = Math.max(1, Math.round(h)); return { w: Math.max(1, Math.round((rh * w) / h)), h: rh };
 }
 
 function compileShader(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
@@ -58,27 +86,40 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
   if (!sh) throw new Error('createShader falhou');
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
-    throw new Error(`Shader não compilou: ${gl.getShaderInfoLog(sh) ?? 'sem log'}`);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh) ?? 'sem log';
+    gl.deleteShader(sh);
+    throw new Error(`Shader não compilou: ${log}`);
+  }
   return sh;
 }
 
-const NEUTRAL = { gray: 0, sat: 1, con: 0, gamma: [1, 1, 1], gain: [1, 1, 1], lift: [0, 0, 0] };
+const NEUTRAL: FilterDef = { id: '', name: 'Neutro', gray: 0, sat: 1, con: 0, gamma: [1, 1, 1], gain: [1, 1, 1], lift: [0, 0, 0] };
 
 export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {}): Renderer {
   const maxSide = opts.maxSide ?? 2048;
   let gl: WebGLRenderingContext | null = canvas.getContext('webgl', { preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL não disponível neste dispositivo');
+  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
   const vs = compileShader(gl, gl.VERTEX_SHADER, VERT);
-  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG);
+  let fs: WebGLShader;
+  try {
+    fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG);
+  } catch (e) {
+    gl.deleteShader(vs);
+    throw e;
+  }
   let prog: WebGLProgram | null = gl.createProgram();
-  if (!prog) throw new Error('createProgram falhou');
+  if (!prog) { gl.deleteShader(vs); gl.deleteShader(fs); throw new Error('createProgram falhou'); }
   gl.attachShader(prog, vs); gl.attachShader(prog, fs);
   gl.linkProgram(prog);
   gl.deleteShader(vs); gl.deleteShader(fs);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-    throw new Error(`Programa não linkou: ${gl.getProgramInfoLog(prog) ?? 'sem log'}`);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(prog) ?? 'sem log';
+    gl.deleteProgram(prog);
+    throw new Error(`Programa não linkou: ${log}`);
+  }
   gl.useProgram(prog);
 
   // quad fullscreen: 2 triângulos em clip space
@@ -96,22 +137,28 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
     exposure: u('uExposure'), temperature: u('uTemperature'), shadows: u('uShadows'),
     highlights: u('uHighlights'), sharpness: u('uSharpness'), vignette: u('uVignette'),
     fGray: u('uFGray'), fSat: u('uFSat'), fCon: u('uFCon'), fIntensity: u('uFIntensity'),
-    fGamma: u('uFGamma'), fGain: u('uFGain'), fLift: u('uFLift'),
+    fGammaInv: u('uFGammaInv'), fGain: u('uFGain'), fLift: u('uFLift'),
   };
 
   let tex: WebGLTexture | null = null;
   let texW = 0, texH = 0;
 
   function frameSize(s: EditSnapshot): { w: number; h: number } {
+    if (!texW || !texH) return { w: 1, h: 1 };
     const k = s.geometry.rotate90 & 3;
     let w = k % 2 ? texH : texW, h = k % 2 ? texW : texH;
     if (s.geometry.crop) { w *= s.geometry.crop.w; h *= s.geometry.crop.h; }
-    return { w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)) };
+    return roundKeepingAspect(w, h);
   }
 
   return {
+    get hasImage() { return tex !== null; },
+    limits: { maxTextureSize },
+
     setImage(bitmap: ImageBitmap) {
       if (!gl) return;
+      if (bitmap.width > maxTextureSize || bitmap.height > maxTextureSize)
+        throw new Error(`Imagem ${bitmap.width}x${bitmap.height} excede o limite da GPU (MAX_TEXTURE_SIZE=${maxTextureSize}) — reduza antes de enviar`);
       if (tex) gl.deleteTexture(tex);
       tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -129,7 +176,7 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       if (!gl || !prog || !tex) return;
       const { w: fw, h: fh } = frameSize(snapshot);
       const fit = Math.min(1, maxSide / Math.max(fw, fh));
-      const cw = Math.max(1, Math.round(fw * fit)), ch = Math.max(1, Math.round(fh * fit));
+      const { w: cw, h: ch } = roundKeepingAspect(fw * fit, fh * fit);
       if (canvas.width !== cw) canvas.width = cw;   // só redimensiona se mudou (evita flicker)
       if (canvas.height !== ch) canvas.height = ch;
       gl.viewport(0, 0, cw, ch);
@@ -137,8 +184,12 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.uniform1i(loc.image, 0);
-      gl.uniform2f(loc.texel, 1 / texW, 1 / texH);
-      gl.uniformMatrix3fv(loc.uvMat, false, uvMatrix(snapshot.geometry, texW, texH));
+
+      const cover = computeUvMatrix(snapshot.geometry, texW, texH);
+      gl.uniformMatrix3fv(loc.uvMat, false, M_OUT);
+      // px da fonte por px de saída: mantém o raio do sharpen igual no preview e no export
+      const texelScale = Math.max(1, 1 / (cover * fit));
+      gl.uniform2f(loc.texel, texelScale / texW, texelScale / texH);
 
       const a = snapshot.adjustments;
       gl.uniform1f(loc.brightness, (a.brightness / 100) * 0.35);
@@ -157,7 +208,8 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       gl.uniform1f(loc.fGray, f.gray);
       gl.uniform1f(loc.fSat, f.sat);
       gl.uniform1f(loc.fCon, f.con);
-      gl.uniform3fv(loc.fGamma, f.gamma);
+      gl.uniform3f(loc.fGammaInv, // 1/gamma pré-computado com guarda (shader recebe já invertido)
+        1 / Math.max(1e-3, f.gamma[0]), 1 / Math.max(1e-3, f.gamma[1]), 1 / Math.max(1e-3, f.gamma[2]));
       gl.uniform3fv(loc.fGain, f.gain);
       gl.uniform3fv(loc.fLift, f.lift);
 
@@ -171,6 +223,7 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       if (tex) gl.deleteTexture(tex);
       if (quad) gl.deleteBuffer(quad);
       if (prog) gl.deleteProgram(prog);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
       tex = null; quad = null; prog = null; gl = null;
     },
   };

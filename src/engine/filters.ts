@@ -23,4 +23,8 @@ export const FILTERS: FilterDef[] = [
   F('pastel', 'Pastel', { sat: 0.7, con: -0.12, lift: [0.08, 0.07, 0.08], gamma: [1.08, 1.08, 1.08] }),
   F('tropical', 'Tropical', { sat: 1.3, gain: [1.05, 1.05, 0.9], con: 0.1 }),
 ];
-export const filterById = (id: string) => FILTERS.find(f => f.id === id) ?? null;
+export const filterById = (id: string): FilterDef | null => {
+  const f = FILTERS.find(x => x.id === id) ?? null;
+  if (!f) console.warn(`[filters] filtro desconhecido: "${id}"`);
+  return f;
+};
