@@ -293,12 +293,13 @@ export async function openImage(source: 'gallery' | 'camera'): Promise<LoadedIma
   const blob = await (await fetch(photo.webPath)).blob();
   // preview reduzido (≤2048 no lado maior, orientação EXIF aplicada) — full-res só no export/IA, a partir do blob
   const probe = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-  const scale = Math.min(1, 2048 / Math.max(probe.width, probe.height));
+  const fullW = probe.width, fullH = probe.height; // capturar ANTES do close (bitmap fechado devolve 0)
+  const scale = Math.min(1, 2048 / Math.max(fullW, fullH));
   const bitmap = scale < 1
-    ? await createImageBitmap(blob, { imageOrientation: 'from-image', resizeWidth: Math.round(probe.width * scale), resizeHeight: Math.round(probe.height * scale) })
+    ? await createImageBitmap(blob, { imageOrientation: 'from-image', resizeQuality: 'high', resizeWidth: Math.round(fullW * scale), resizeHeight: Math.round(fullH * scale) })
     : probe;
   if (bitmap !== probe) probe.close();
-  return { bitmap, blob, width: probe.width, height: probe.height }; // width/height = dimensões REAIS (full-res)
+  return { bitmap, blob, width: fullW, height: fullH }; // width/height = dimensões REAIS (full-res)
 }
 ```
 Convenções do engine (fechadas na T3): crop y-down; flips em eixo de tela; straighten + = anti-horário; VRAM: textura de preview vem do bitmap reduzido.
