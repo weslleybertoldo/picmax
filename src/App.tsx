@@ -33,8 +33,11 @@ export default function App() {
       ) : (
         <Home onImage={(img) => setBases([img])} />
       )}
-      {/* Check automático no boot (T13): banner flutuante, independente de estar na Home ou no Editor. */}
-      <UpdateChecker />
+      {/* Check automático no boot (T13): SÓ na Home (review, fix 1) — no Editor o banner ficaria por
+          cima da tab bar (Anotar/Melhorar), e não há como fechar/scrollar por baixo dela. Se o check
+          terminar depois do usuário já ter entrado no Editor, o UpdateChecker desmonta sem mostrar
+          nada; ele reaparece (com um novo check) no próximo boot ou ao voltar pra Home. */}
+      {!bases && <UpdateChecker />}
     </>
   );
 }

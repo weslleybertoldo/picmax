@@ -71,15 +71,45 @@ interface GithubRelease {
   assets?: GithubAsset[];
 }
 
+// Timeout do fetch da release (review T13, fix 2): sem isso, rede travada deixa o spinner do rodapé
+// (e o check silencioso de boot) presos indefinidamente — o AbortController força a desistência.
+const FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Release mais nova existe, mas ainda não tem asset `.apk` (ex.: a T12 publicou a tag antes de subir
+ * o binário). Erro distinto de falha de rede/API pra o chamador poder diferenciar a mensagem
+ * (review T13, fix 3: "Nenhum APK disponível ainda" ≠ "Não foi possível verificar agora").
+ */
+export class NoApkAssetError extends Error {
+  readonly version: string;
+
+  constructor(version: string) {
+    super(`release ${version} sem asset .apk`);
+    this.name = 'NoApkAssetError';
+    this.version = version;
+  }
+}
+
+async function fetchLatestRelease(): Promise<GithubRelease> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(RELEASES_URL, { cache: 'no-store', signal: controller.signal });
+    if (!res.ok) throw new Error(`github_${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Busca a última release publicada no GitHub e compara com a versão instalada.
- * Retorna null quando já está na versão mais recente; lança erro em caso de falha de rede/API
- * (chamador decide como comunicar — ver rodapé da Home e o banner de boot).
+ * Retorna null quando já está na versão mais recente; lança `NoApkAssetError` quando a release é mais
+ * nova mas ainda não tem o binário, ou um erro genérico em falha de rede/API/timeout (10s) — o
+ * chamador decide como comunicar (ver rodapé da Home e o banner de boot).
  */
 export async function checkLatest(): Promise<UpdateInfo | null> {
-  const res = await fetch(RELEASES_URL, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`github_${res.status}`);
-  const release: GithubRelease = await res.json();
+  const release = await fetchLatestRelease();
 
   const remoteVersion = (release.tag_name || '').replace(/^v/, '');
   if (!remoteVersion) throw new Error('sem_tag_name');
@@ -88,7 +118,7 @@ export async function checkLatest(): Promise<UpdateInfo | null> {
   if (!isNewer(remoteVersion, current)) return null;
 
   const apkAsset = (release.assets || []).find((a) => a.name.endsWith('.apk'));
-  if (!apkAsset) throw new Error('sem_asset_apk');
+  if (!apkAsset) throw new NoApkAssetError(remoteVersion);
 
   return {
     version: remoteVersion,

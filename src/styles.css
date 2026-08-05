@@ -919,6 +919,11 @@ input[type='range']::-moz-range-thumb {
   color: var(--text-dim);
   font-size: 11px;
 }
+.home-update-noapk {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
 .home-update-download {
   height: 36px;
   padding: 0 16px;

@@ -2,7 +2,15 @@
 import { useState } from 'react';
 import { openImage, type LoadedImage } from '../io/openImage';
 import PresetsPanel from '../presets/PresetsPanel';
-import { checkLatest, downloadAndInstall, type UpdateInfo } from '../update/apkUpdater';
+import { checkLatest, downloadAndInstall, NoApkAssetError, type UpdateInfo } from '../update/apkUpdater';
+
+// Resultado da verificação manual do rodapé — estado próprio p/ "release sem apk" (review T13, fix 3):
+// sem isso, cairia no mesmo balde genérico de "erro de rede" e a mensagem ficaria enganosa.
+type UpdateCheckResult =
+  | { status: 'ok' }
+  | { status: 'update'; info: UpdateInfo }
+  | { status: 'no-apk' }
+  | { status: 'error' };
 
 export interface HomeProps {
   onImage: (image: LoadedImage) => void;
@@ -60,37 +68,32 @@ export default function Home({ onImage }: HomeProps) {
   // (UpdateChecker.tsx, montado no App): aqui o usuário pede explicitamente, então mesmo "sem
   // update" e "erro" ganham feedback inline (o banner de boot não mostra nada nesses 2 casos).
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateChecked, setUpdateChecked] = useState(false);
-  const [updateError, setUpdateError] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateNeedsPerm, setUpdateNeedsPerm] = useState(false);
 
   async function handleCheckUpdate() {
     setCheckingUpdate(true);
-    setUpdateError(false);
     setUpdateNeedsPerm(false);
     try {
       const info = await checkLatest();
-      setUpdateInfo(info);
-    } catch {
-      setUpdateInfo(null);
-      setUpdateError(true);
+      setUpdateResult(info ? { status: 'update', info } : { status: 'ok' });
+    } catch (e) {
+      setUpdateResult(e instanceof NoApkAssetError ? { status: 'no-apk' } : { status: 'error' });
     } finally {
-      setUpdateChecked(true);
       setCheckingUpdate(false);
     }
   }
 
   async function handleDownloadUpdate() {
-    if (!updateInfo) return;
+    if (updateResult?.status !== 'update') return;
     setUpdateNeedsPerm(false);
     setUpdateProgress(0);
     try {
-      const result = await downloadAndInstall(updateInfo.apkUrl, setUpdateProgress);
+      const result = await downloadAndInstall(updateResult.info.apkUrl, setUpdateProgress);
       if (result === 'permission') setUpdateNeedsPerm(true);
     } catch {
-      setUpdateError(true);
+      setUpdateResult({ status: 'error' });
     } finally {
       setUpdateProgress(null);
     }
@@ -210,11 +213,15 @@ export default function Home({ onImage }: HomeProps) {
           Verificar atualizações
         </button>
 
-        {updateChecked && (
+        {updateResult && (
           <div className="home-update-result" data-testid="update-result">
-            {updateError ? (
+            {updateResult.status === 'error' ? (
               <p className="home-update-error">Não foi possível verificar agora.</p>
-            ) : updateInfo ? (
+            ) : updateResult.status === 'no-apk' ? (
+              <p className="home-update-noapk" data-testid="update-no-apk">
+                Nenhum APK disponível ainda.
+              </p>
+            ) : updateResult.status === 'update' ? (
               updateProgress !== null ? (
                 <div className="home-update-progress">
                   <div className="home-update-progress-track">
@@ -234,7 +241,7 @@ export default function Home({ onImage }: HomeProps) {
                   data-testid="download-update"
                   onClick={handleDownloadUpdate}
                 >
-                  {updateNeedsPerm ? 'Tentar novamente' : `Baixar v${updateInfo.version}`}
+                  {updateNeedsPerm ? 'Tentar novamente' : `Baixar v${updateResult.info.version}`}
                 </button>
               )
             ) : (
