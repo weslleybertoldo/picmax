@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import Home from './screens/Home';
 import Editor from './screens/Editor';
+import UpdateChecker from './update/UpdateChecker';
 import type { LoadedImage } from './io/openImage';
 
 export default function App() {
@@ -21,14 +22,19 @@ export default function App() {
     setBases(null);
   }
 
-  if (bases) {
-    return (
-      <Editor
-        bases={bases}
-        onAddBase={(img) => setBases((prev) => (prev ? [...prev, img] : [img]))}
-        onBack={handleBack}
-      />
-    );
-  }
-  return <Home onImage={(img) => setBases([img])} />;
+  return (
+    <>
+      {bases ? (
+        <Editor
+          bases={bases}
+          onAddBase={(img) => setBases((prev) => (prev ? [...prev, img] : [img]))}
+          onBack={handleBack}
+        />
+      ) : (
+        <Home onImage={(img) => setBases([img])} />
+      )}
+      {/* Check automático no boot (T13): banner flutuante, independente de estar na Home ou no Editor. */}
+      <UpdateChecker />
+    </>
+  );
 }

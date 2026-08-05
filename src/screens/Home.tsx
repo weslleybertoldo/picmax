@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { openImage, type LoadedImage } from '../io/openImage';
 import PresetsPanel from '../presets/PresetsPanel';
+import { checkLatest, downloadAndInstall, type UpdateInfo } from '../update/apkUpdater';
 
 export interface HomeProps {
   onImage: (image: LoadedImage) => void;
@@ -54,6 +55,46 @@ export default function Home({ onImage }: HomeProps) {
   // simples de lista; tocar num modelo aqui não aplica nada (não há edição em curso), só mostra um
   // hint (ver PresetsPanel: `onApply` ausente = modo "view").
   const [showPresets, setShowPresets] = useState(false);
+
+  // Rodapé (T13): verificação manual de atualização — separado do check automático de boot
+  // (UpdateChecker.tsx, montado no App): aqui o usuário pede explicitamente, então mesmo "sem
+  // update" e "erro" ganham feedback inline (o banner de boot não mostra nada nesses 2 casos).
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateChecked, setUpdateChecked] = useState(false);
+  const [updateError, setUpdateError] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateNeedsPerm, setUpdateNeedsPerm] = useState(false);
+
+  async function handleCheckUpdate() {
+    setCheckingUpdate(true);
+    setUpdateError(false);
+    setUpdateNeedsPerm(false);
+    try {
+      const info = await checkLatest();
+      setUpdateInfo(info);
+    } catch {
+      setUpdateInfo(null);
+      setUpdateError(true);
+    } finally {
+      setUpdateChecked(true);
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function handleDownloadUpdate() {
+    if (!updateInfo) return;
+    setUpdateNeedsPerm(false);
+    setUpdateProgress(0);
+    try {
+      const result = await downloadAndInstall(updateInfo.apkUrl, setUpdateProgress);
+      if (result === 'permission') setUpdateNeedsPerm(true);
+    } catch {
+      setUpdateError(true);
+    } finally {
+      setUpdateProgress(null);
+    }
+  }
 
   async function handleOpen(source: 'gallery' | 'camera') {
     setError(null);
@@ -155,6 +196,53 @@ export default function Home({ onImage }: HomeProps) {
           </button>
         )}
       </div>
+
+      <footer className="home-footer">
+        <p className="home-version">v{__APP_VERSION__}</p>
+        <button
+          type="button"
+          className="home-update-check"
+          data-testid="check-update"
+          disabled={checkingUpdate}
+          onClick={handleCheckUpdate}
+        >
+          <span className={checkingUpdate ? 'home-update-spin' : ''}>⟳</span>
+          Verificar atualizações
+        </button>
+
+        {updateChecked && (
+          <div className="home-update-result" data-testid="update-result">
+            {updateError ? (
+              <p className="home-update-error">Não foi possível verificar agora.</p>
+            ) : updateInfo ? (
+              updateProgress !== null ? (
+                <div className="home-update-progress">
+                  <div className="home-update-progress-track">
+                    <div
+                      className="home-update-progress-fill"
+                      style={{ width: `${updateProgress}%` }}
+                    />
+                  </div>
+                  <p className="home-update-progress-label">
+                    {updateProgress < 100 ? `Baixando ${updateProgress}%` : 'Abrindo instalador…'}
+                  </p>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary home-update-download"
+                  data-testid="download-update"
+                  onClick={handleDownloadUpdate}
+                >
+                  {updateNeedsPerm ? 'Tentar novamente' : `Baixar v${updateInfo.version}`}
+                </button>
+              )
+            ) : (
+              <p className="home-update-ok">✓ Versão mais recente</p>
+            )}
+          </div>
+        )}
+      </footer>
     </div>
   );
 }
