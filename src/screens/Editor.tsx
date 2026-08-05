@@ -179,18 +179,26 @@ export default function Editor({ image, onBack }: EditorProps) {
         <canvas ref={canvasRef} className="editor-canvas" data-testid="canvas" />
         {showStraightenGrid && <StraightenGrid canvasRef={canvasRef} containerRef={canvasWrapRef} />}
         {/* Camada de anotações: visível em TODAS as abas (anotações fazem parte da edição), mas só
-            captura pointer na aba Anotar com uma ferramenta ativa e fora do modo Cortar (que já tem
-            seu próprio overlay/gestos — ver CropOverlay abaixo). */}
-        <AnnotationCanvas
-          canvasRef={canvasRef}
-          containerRef={canvasWrapRef}
-          present={history.present}
-          dispatch={dispatch}
-          enabled={!cropMode && activeTab === 'anotar' && annotateTool !== null}
-          tool={annotateTool}
-          color={annotateColor}
-          size={annotateSize}
-        />
+            captura pointer na aba Anotar com uma ferramenta ativa. Desmontada inteira no modo Cortar
+            (quality review): enquanto cropMode está ativo, `displaySnapshot` renderiza o frame com
+            geometry.crop=null (ver comentário acima) — um frame DIFERENTE do frame final em que as
+            frações das anotações foram desenhadas. Deixar a camada montada nesse momento mostrava as
+            anotações deslocadas/fora de escala (glitch visual real, achado no quality review) até o
+            usuário sair do modo Cortar. Cortar/Aplicar já limpam `annotations` com confirm quando há
+            alguma (ver handleCropApply) — então escondê-las ENQUANTO o modo está aberto não perde nada,
+            só evita mostrar uma posição temporariamente errada. */}
+        {!cropMode && (
+          <AnnotationCanvas
+            canvasRef={canvasRef}
+            containerRef={canvasWrapRef}
+            present={history.present}
+            dispatch={dispatch}
+            enabled={activeTab === 'anotar' && annotateTool !== null}
+            tool={annotateTool}
+            color={annotateColor}
+            size={annotateSize}
+          />
+        )}
       </div>
 
       {cropMode ? (

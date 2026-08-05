@@ -8,6 +8,19 @@
 // multiplicamos por (w,h) — as dimensões do canvas de DESTINO em px — pra converter pra pixels reais;
 // como w/h já carregam o aspecto e a resolução do destino (preview em CSS×dpr, ou full-res no export),
 // a MESMA lista de anotações rasteriza correta em qualquer tamanho de canvas.
+//
+// ⚠️ PRECONDIÇÃO OBRIGATÓRIA (quality review, achado real): `ctx` DEVE pertencer a um canvas
+// TRANSPARENTE e ISOLADO (sem a foto nem qualquer outro conteúdo já desenhado nele) — NUNCA chame
+// `drawAnnotations` direto no ctx que já tem a foto. `erase:true` usa
+// `globalCompositeOperation='destination-out'`, que apaga QUALQUER pixel já presente naquele ctx,
+// não só anotações — se a foto estiver no MESMO canvas, a borracha fura a foto (bug real, não
+// hipotético: é exatamente assim que a T6/AnnotationCanvas isola a camada, e é exatamente o cuidado
+// que o export full-res da T8 precisa repetir). Fluxo correto sempre: 1) `drawAnnotations` numa camada
+// offscreen transparente própria; 2) compor essa camada JÁ PRONTA sobre a foto via
+// `ctx.drawImage(layer, 0, 0)` (source-over, no ctx da foto). Use `renderAnnotationsLayer` abaixo pra
+// não repetir esse cuidado manualmente em cada chamador — ela cria o canvas isolado, chama
+// `drawAnnotations` nele e devolve pronto pra compor; T8 só chama e compõe, nunca chama
+// `drawAnnotations` direto.
 import type { Annotation } from '../state/editStack';
 
 const ARROW_HEAD_ANGLE = Math.PI / 6; // 30°, spec: "cabeça de 2 segmentos a 30°"
@@ -90,4 +103,20 @@ export function drawAnnotations(ctx: CanvasRenderingContext2D, annotations: Anno
     }
     ctx.restore();
   }
+}
+
+// Cria a camada offscreen ISOLADA que a precondição acima exige — um <canvas> w×h TRANSPARENTE, sem
+// nenhum outro conteúdo — chama `drawAnnotations` nele e devolve pronto pra compor. Reusada em dois
+// lugares: AnnotationCanvas.tsx (a `layerRef` já É esse canvas isolado, criado 1x e reaproveitado a
+// cada redesenho) e o export full-res da T8 (chama isto pra cada render, depois só
+// `ctx.drawImage(layer, 0, 0)` no canvas final que já tem a foto — nunca chama `drawAnnotations`
+// direto no ctx da foto).
+export function renderAnnotationsLayer(annotations: Annotation[], w: number, h: number): HTMLCanvasElement {
+  const layer = document.createElement('canvas');
+  layer.width = Math.max(1, Math.round(w));
+  layer.height = Math.max(1, Math.round(h));
+  const ctx = layer.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D não disponível pra renderizar a camada de anotações');
+  drawAnnotations(ctx, annotations, layer.width, layer.height);
+  return layer;
 }
