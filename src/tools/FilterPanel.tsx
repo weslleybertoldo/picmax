@@ -13,6 +13,14 @@ export interface FilterPanelProps {
 
 const THUMB_WIDTH = 128;
 
+interface ThumbCache { original: string; filters: Record<string, string> }
+// Cache module-level (sobrevive ao unmount do FilterPanel) — chave = o próprio ImageBitmap, sem
+// segurar referência forte a ele no valor. O Editor desmonta este painel ao trocar de aba (ternário
+// de abas), então um useState/useRef comum morreria a cada Ajustes↔Filtros; WeakMap resolve isso
+// e ainda invalida sozinho quando o bitmap morre (GC) — troca de foto regenera naturalmente, sem
+// precisar limpar a entrada manualmente.
+const thumbCache = new WeakMap<ImageBitmap, ThumbCache>();
+
 export default function FilterPanel({ present, dispatch, image }: FilterPanelProps) {
   const [originalThumb, setOriginalThumb] = useState<string | null>(null);
   const [filterThumbs, setFilterThumbs] = useState<Record<string, string>>({});
@@ -24,9 +32,18 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
   // intensidade do filtro ATIVO antes do gesto de slider em curso; null = nenhum gesto em andamento.
   const baselineRef = useRef<number | null>(null);
 
-  // Gera as miniaturas 1x por imagem (não por render): thumb base derivada do bitmap de preview já
-  // carregado (mais barato que reprocessar o blob original) + 1 render offscreen por filtro a 100%.
+  // Gera as miniaturas 1x por imagem (não por render, não por remount): thumb base derivada do bitmap
+  // de preview já carregado (mais barato que reprocessar o blob original) + 1 render offscreen por
+  // filtro a 100%. Cache-hit (revisita da aba) usa o resultado do WeakMap direto — zero createRenderer,
+  // zero toDataURL.
   useEffect(() => {
+    const cached = thumbCache.get(image.bitmap);
+    if (cached) {
+      setOriginalThumb(cached.original);
+      setFilterThumbs(cached.filters);
+      return; // já em cache: nada a gerar, nada a destruir no cleanup (nenhum renderer foi criado)
+    }
+
     let cancelled = false;
     let renderer: ReturnType<typeof createRenderer> | null = null;
     setOriginalThumb(null);
@@ -43,7 +60,8 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
       originalCanvas.getContext('2d')?.drawImage(thumbBitmap, 0, 0);
       // PNG (não jpeg) pro card "Original": além de sem perdas num thumb tão pequeno, distingue
       // visualmente/por seletor os 2 tipos de miniatura (a original não passou pelo pipeline WebGL).
-      setOriginalThumb(originalCanvas.toDataURL('image/png'));
+      const originalUrl = originalCanvas.toDataURL('image/png');
+      setOriginalThumb(originalUrl);
 
       // renderer offscreen compartilhado (canvas fora da árvore) — descartável, por isso destroy({loseContext:true}).
       const offCanvas = document.createElement('canvas');
@@ -51,7 +69,8 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
         renderer = createRenderer(offCanvas);
       } catch {
         thumbBitmap.close();
-        return; // sem WebGL: fica só com a miniatura "Original"
+        if (!cancelled) thumbCache.set(image.bitmap, { original: originalUrl, filters: {} }); // sem WebGL: não vale retentar
+        return; // fica só com a miniatura "Original"
       }
       renderer.setImage(thumbBitmap); // texImage2D copia os pixels de imediato — seguro fechar já a seguir
       thumbBitmap.close();
@@ -59,6 +78,7 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
       // IMPORTANTE (decisão de design): as miniaturas mostram o filtro PURO, com ajustes/geometria
       // default — não os ajustes atuais do usuário. A miniatura representa o filtro em si, não o
       // resultado final da edição (senão mudaria a cada slider da aba Ajustes, muito custoso).
+      const filters: Record<string, string> = {};
       for (let i = 0; i < FILTERS.length; i++) {
         if (cancelled) break;
         const f = FILTERS[i];
@@ -71,9 +91,13 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
         });
         const url = offCanvas.toDataURL('image/jpeg', 0.8);
         if (cancelled) break;
+        filters[f.id] = url;
         setFilterThumbs((prev) => ({ ...prev, [f.id]: url }));
         if (i % 4 === 3) await new Promise((r) => setTimeout(r)); // libera a UI a cada 4 miniaturas
       }
+      // só grava no cache se completou as 20 sem interrupção — cancelado no meio (troca de foto antes
+      // de terminar) não deixa entrada parcial; a próxima montagem pra essa imagem gera tudo de novo.
+      if (!cancelled) thumbCache.set(image.bitmap, { original: originalUrl, filters });
     })();
 
     return () => {
