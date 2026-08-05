@@ -366,7 +366,7 @@ Convenções do engine (fechadas na T3): crop y-down; flips em eixo de tela; str
 
 **Files:** Create: `src/io/exportImage.ts`; Create: `android/app/src/main/java/com/bertoldo/picmax/ImageEnhancerPlugin.kt` (método `saveToGallery`); Modify: `android/app/src/main/java/com/bertoldo/picmax/MainActivity.kt`
 
-- [ ] **Step 1: Render full-res** — `exportImage(base: LoadedImage, snap: EditSnapshot): Promise<Blob>`: canvas offscreen no tamanho final (aplica crop/rot90/resizeMaxSide; cap no `MAX_TEXTURE_SIZE` do GL, mínimo garantido 4096), `createRenderer` + `setImage(bitmap full)` + `render(snap)`, depois compõe anotações com `drawAnnotations` num ctx 2D por cima, `canvas.toBlob('image/jpeg', 0.9)` (PNG se `blob.type==='image/png'`).
+- [ ] **Step 1: Render full-res** — `exportImage(base: LoadedImage, snap: EditSnapshot): Promise<Blob>`: canvas offscreen no tamanho final (aplica crop/rot90/resizeMaxSide; cap no `limits.maxTextureSize` do renderer), `createRenderer` + `setImage(bitmap full)` + `render(snap)`, depois compõe anotações via `renderAnnotationsLayer(annotations, w, h)` (camada transparente isolada — NUNCA drawAnnotations direto no ctx com a foto: erase usa destination-out e furaria a foto) + `ctx.drawImage(layer, 0, 0)`, `canvas.toBlob('image/jpeg', 0.9)` (PNG se `blob.type==='image/png'`).
 - [ ] **Step 2: Plugin Kotlin — registro + saveToGallery**
 
 ```kotlin
