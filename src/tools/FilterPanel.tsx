@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch } from 'react';
 import { createRenderer } from '../engine/renderer';
 import { FILTERS } from '../engine/filters';
-import { IG_FILTERS } from '../engine/igFilters';
+import { AR_FILTERS, IG_FILTERS } from '../engine/igFilters';
 import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, type EditAction, type EditSnapshot, type FilterOp } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import PresetsPanel from '../presets/PresetsPanel';
@@ -21,11 +21,12 @@ export interface FilterPanelProps {
 
 const THUMB_WIDTH = 128;
 
-// Ordem de GERAÇÃO das miniaturas (v1.1, ~40 thumbs): Instagram primeiro (é a 1ª seção visível ao
-// abrir a aba — Dark Sharp Fiel/Forte/Max na frente, decisão de produto), Clássicos na sequência —
-// o loop libera a UI a cada 4 thumbs, então a 1ª leva aparece sem esperar a 2ª. A EXIBIÇÃO usa
-// IG_FILTERS/FILTERS separados (2 carrosséis com título).
-const ALL_FILTER_DEFS: Array<{ id: string }> = [...IG_FILTERS, ...FILTERS];
+// Ordem de GERAÇÃO das miniaturas (v1.1 r5, ~49 thumbs): AR recriados primeiro (1ª seção visível ao
+// abrir a aba), Instagram e Clássicos na sequência — o loop libera a UI a cada 4 thumbs, então a 1ª
+// leva aparece sem esperar as demais. A EXIBIÇÃO usa AR_FILTERS/IG_FILTERS/FILTERS separados
+// (3 carrosséis com título). ⚠️ Thumbs vêm do renderer puro: o relógio do Slim Black (overlay 2D de
+// preview/export) NÃO entra nas miniaturas de propósito — ver clockOverlay.ts.
+const ALL_FILTER_DEFS: Array<{ id: string }> = [...AR_FILTERS, ...IG_FILTERS, ...FILTERS];
 
 interface ThumbCache { original: string; filters: Record<string, string> }
 // Cache module-level (sobrevive ao unmount do FilterPanel) — chave = o próprio ImageBitmap, sem
@@ -187,11 +188,11 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
           histórico, desfazível) — crop/anotações/base da IA nunca fazem parte do modelo. */}
       <PresetsPanel variant="inline" title="Meus modelos" onApply={onApplyPreset} refreshKey={presetsVersion} />
 
-      {/* 2 carrosséis com título (v1.1): "Instagram" PRIMEIRO (card Original + Dark Sharp
-          Fiel/Forte/Max + 16 CSSgram — ordem de abertura decidida pelo Weslley) e "Clássicos"
-          (os 20 do grade) depois — mesmo card/comportamento nas duas seções. */}
-      <h4 className="filter-section-title">Instagram</h4>
-      <div className="filter-carousel" data-testid="filter-carousel-ig">
+      {/* 3 carrosséis com título (v1.1 r5): "AR Recriados" PRIMEIRO (card Original + Dark Sharp ×3
+          + Slim Black iOS ×3 + The Motto ×3 + ВУИ ×3 — ordem aprovada pelo Weslley), depois
+          "Instagram" (16 CSSgram) e "Clássicos" (20 do grade) — mesmo card/comportamento em todas. */}
+      <h4 className="filter-section-title">AR Recriados</h4>
+      <div className="filter-carousel" data-testid="filter-carousel-ar">
         <button
           type="button"
           className={`filter-card${activeId === null ? ' active' : ''}`}
@@ -203,6 +204,24 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
           </span>
           <span className="filter-name">Original</span>
         </button>
+        {AR_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            className={`filter-card${activeId === f.id ? ' active' : ''}`}
+            data-testid={`filter-${f.id}`}
+            onClick={() => selectFilter(f.id)}
+          >
+            <span className="filter-thumb-wrap">
+              {filterThumbs[f.id] ? <img src={filterThumbs[f.id]} alt="" className="filter-thumb" /> : null}
+            </span>
+            <span className="filter-name">{f.name}</span>
+          </button>
+        ))}
+      </div>
+
+      <h4 className="filter-section-title">Instagram</h4>
+      <div className="filter-carousel" data-testid="filter-carousel-ig">
         {IG_FILTERS.map((f) => (
           <button
             key={f.id}

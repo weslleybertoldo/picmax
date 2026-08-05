@@ -15,9 +15,16 @@ import type { EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from './openImage';
 import { createRenderer } from '../engine/renderer';
 import { renderAnnotationsLayer } from '../annotate/drawAnnotations';
+import { drawClockOverlay, isClockFilter } from '../engine/clockOverlay';
 import { decodeOrientedCanvas } from './decodeImage';
 
-export async function exportImage(base: LoadedImage, snap: EditSnapshot): Promise<Blob> {
+export interface ExportOpts {
+  // Relógio do Slim Black iOS (r4): instante capturado quando o filtro foi APLICADO no Editor —
+  // o export desenha o mesmo horário do preview. Sem valor, usa agora.
+  clockDate?: Date;
+}
+
+export async function exportImage(base: LoadedImage, snap: EditSnapshot, opts: ExportOpts = {}): Promise<Blob> {
   let fullBitmap: ImageBitmap | null = null;
   let scaledBitmap: ImageBitmap | null = null;
   const probeCanvas = document.createElement('canvas');
@@ -70,6 +77,12 @@ export async function exportImage(base: LoadedImage, snap: EditSnapshot): Promis
     if (snap.annotations.length > 0) {
       const layer = renderAnnotationsLayer(snap.annotations, w, h);
       ctx.drawImage(layer, 0, 0);
+    }
+    // Relógio do Slim Black iOS (r4): camada 2D, parte do look do filtro (qualquer variante) —
+    // mesma composição do preview. As MINIATURAS não passam por aqui (renderer puro) e ficam sem
+    // relógio de propósito (ilegível em thumb; ver clockOverlay.ts).
+    if (isClockFilter(snap.filter?.id)) {
+      drawClockOverlay(ctx, w, h, opts.clockDate ?? new Date());
     }
 
     const mime = base.blob.type === 'image/png' ? 'image/png' : 'image/jpeg';

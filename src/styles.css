@@ -787,6 +787,16 @@ input[type='range']::-moz-range-thumb {
   position: absolute;
   touch-action: none;
 }
+/* relógio do Slim Black iOS (r4): decorativo — NUNCA captura gesto (tap antes/depois passa direto) */
+.clock-overlay {
+  position: absolute;
+  pointer-events: none;
+}
+.clock-overlay-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 .annotation-layer-canvas {
   width: 100%;
   height: 100%;

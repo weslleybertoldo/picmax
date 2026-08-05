@@ -157,6 +157,9 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
     fGammaInv: u('uFGammaInv'), fGain: u('uFGain'), fLift: u('uFLift'),
     igActive: u('uIgActive'), igOpKind: u('uIgOpKind'), igOpAmt: u('uIgOpAmt'),
     clarity: u('uClarity'), clarityRad: u('uClarityRad'),
+    motionOn: u('uMotionOn'), motionStep: u('uMotionStep'),
+    echoAmt: u('uEchoAmt'), echoOff: u('uEchoOff'), echoStep: u('uEchoStep'),
+    softAmount: u('uSoftAmount'), softRad: u('uSoftRad'),
   };
   // locations das 2 camadas IG (mesma ordem de uniforms pra cada uma)
   const igLayerLoc = [0, 1].map((i) => ({
@@ -284,6 +287,40 @@ export function createRenderer(canvas: HTMLCanvasElement, opts: RendererOpts = {
       gl.uniform1f(loc.clarity, clarity);
       const clarityRad = igDef?.clarityRadius ?? 0.025;
       gl.uniform2f(loc.clarityRad, clarityRad, (clarityRad * texW) / texH);
+      // blurs de base (v1.1 r3): comprimentos/raios como fração da LARGURA da textura, eixo v
+      // compensado pelo aspecto (circular/isotrópico em px); escalados pela intensidade do filtro.
+      const motion = igDef?.motionBlur;
+      const motionLen = (motion?.length ?? 0) * intensity;
+      gl.uniform1f(loc.motionOn, motionLen > 0 ? 1 : 0);
+      if (motion && motionLen > 0) {
+        const rad = (motion.angle * Math.PI) / 180;
+        const dirX = Math.cos(rad), dirY = Math.sin(rad);
+        const stepPx = (motionLen * texW) / 15; // 16 taps → 15 intervalos cobrindo o comprimento total
+        gl.uniform2f(loc.motionStep, (dirX * stepPx) / texW, (dirY * stepPx) / texH);
+        // eco (r4): cluster de 8 taps deslocado ao longo do MESMO eixo; espacial × intensidade,
+        // amount × intensidade (intensidade → 0 apaga o fantasma junto com o resto do look)
+        const echo = motion.echo;
+        const echoAmt = (echo?.amount ?? 0) * intensity;
+        gl.uniform1f(loc.echoAmt, echoAmt);
+        if (echo && echoAmt > 0) {
+          const offPx = echo.offset * intensity * texW;
+          const eStepPx = (echo.length * intensity * texW) / 7; // 8 taps → 7 intervalos
+          gl.uniform2f(loc.echoOff, (dirX * offPx) / texW, (dirY * offPx) / texH);
+          gl.uniform2f(loc.echoStep, (dirX * eStepPx) / texW, (dirY * eStepPx) / texH);
+        } else {
+          gl.uniform2f(loc.echoOff, 0, 0);
+          gl.uniform2f(loc.echoStep, 0, 0);
+        }
+      } else {
+        gl.uniform2f(loc.motionStep, 0, 0);
+        gl.uniform1f(loc.echoAmt, 0);
+        gl.uniform2f(loc.echoOff, 0, 0);
+        gl.uniform2f(loc.echoStep, 0, 0);
+      }
+      const soft = igDef?.softBlur;
+      gl.uniform1f(loc.softAmount, (soft?.amount ?? 0) * intensity);
+      const softRad = soft?.radius ?? 0.01;
+      gl.uniform2f(loc.softRad, softRad, (softRad * texW) / texH);
       gl.uniform1f(loc.vignette, (a.vignette / 100) * 0.8);
 
       gl.uniform1f(loc.fIntensity, intensity);

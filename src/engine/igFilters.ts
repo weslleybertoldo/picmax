@@ -57,6 +57,17 @@ export interface IgFilterDef {
   // filtro; custo (12 fetches extra/pixel) só quando definido. Usada pelo Dark Sharp.
   clarity?: number;
   clarityRadius?: number;
+  // Motion blur direcional (v1.1 r3/r4 — "The Motto"): smear de 16 taps ao longo de `angle` (graus,
+  // 0 = horizontal→direita, 90 = vertical→baixo em coords de tela), comprimento TOTAL `length` como
+  // fração da largura da textura (mesma convenção do clarityRadius). `echo` (r4) = cluster
+  // fantasma de 8 taps: deslocado `offset` (fração da largura, ao longo do MESMO angle; pode ser
+  // negativo), comprimento próprio `length`, misturado por `amount` (0..1) — recria o eco/ghosting
+  // do filtro real, que um smear linear puro não tem. Tudo escalado pela intensidade.
+  motionBlur?: { angle: number; length: number; echo?: { offset: number; length: number; amount: number } };
+  // Soft blur / soft focus (v1.1 r3 — "Aesthetic Blur"): média de 13 amostras (centro + anel) com
+  // raio `radius` (fração da largura), misturada de volta por `amount` (0..1). Escalado pela
+  // intensidade do filtro (amount).
+  softBlur?: { radius: number; amount: number };
 }
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
@@ -87,26 +98,86 @@ function darkSharp(id: string, name: string, clarity: number, contrast: number, 
   };
 }
 
-export const IG_FILTERS: IgFilterDef[] = [
-  // ---- Dark Sharp (fit próprio, não-CSSgram) — 3 intensidades, 1ºs da aba por decisão de produto ----
-  // Recriação por FITTING do filtro AR de story "Dark Sharp" do Instagram (o filtro original é
-  // proprietário — nenhum código/asset dele foi usado): parâmetros ajustados por otimização sobre
-  // um par de screenshots antes/depois fornecido pelo usuário, com custo composto = cor global
-  // (patches 8x8) + CONTRASTE LOCAL (std de luma em blocos 16x16). O look: mais escuro, contraste
-  // alto, levemente dessaturado, bordas frias (vinheta radial que o grade() clássico não representa)
-  // e realce forte de textura/linhas — este último vem do `clarity` (unsharp de raio largo em
-  // luminância, ~1.6% da largura). O sharpen 1px extra é decisão de produto (Weslley): micro-nitidez
-  // além da textura de raio largo — em fotos full-res (bem maiores que a referência de 720px) o 1px
-  // realça detalhe fino que a clarity não alcança.
-  //
-  // 3 variantes (decisão do Weslley em cima das prévias — TODAS entram, como os 3 primeiros cards):
-  //   Fiel  = fit exato (MAE 5.9/4.4/4.5 por canal 0..255; contraste local 15.2 vs 15.2 da referência)
-  //   Forte = clarity/contraste/sharpen ~35% acima do fit (contraste local 17.3, +14% vs referência)
-  //   Max   = ~70% acima (contraste local 19.3, +28% vs referência)
-  // Scripts de fit e métricas completas no report da v1.1.
+// ============================================================================
+// AR_FILTERS — filtros AR de story RECRIADOS POR FITTING (não-CSSgram), TODOS aprovados pelo
+// Weslley em prévias, cada um em 3 intensidades (Fiel = fit exato / Forte ≈ +35% / Max ≈ +70% no
+// eixo de intensidade próprio de cada look). São a PRIMEIRA seção da aba Filtros (decisão de
+// produto), antes de Instagram/Clássicos. Nenhum código/asset dos filtros originais foi usado:
+// parâmetros ajustados por otimização sobre pares antes/depois de screenshots (custo = cor por
+// patch 8x8 + contraste local std 16x16 + estatísticas de gradiente pros blurs + julgamento visual
+// lado a lado). Scripts de fit e métricas nos reports da v1.1 (rodadas 2-4).
+// ============================================================================
+
+// "Slim Black iOS" (rodada 3/4): escurecimento global pesado em 2 estágios (solid multiply +
+// brightness), contraste levemente negativo, saturação ~neutra; vinheta desprezível no fit
+// (dropada). MAE 4.0/3.9/3.9 — o mais fiel dos AR. ⚠️ O RELÓGIO estilo lock screen faz parte do
+// look (pedido do Weslley): overlay 2D desenhado por cima no preview/export pra QUALQUER id
+// slim-black* (ver clockOverlay.ts) — não é shader e NÃO aparece nas miniaturas (ilegível).
+// Variantes escalam o desvio do tom (brightness/contraste — o eixo real deste look).
+function slimBlack(id: string, name: string, contrast: number, brightness: number): IgFilterDef {
+  return {
+    id,
+    name,
+    ops: [op('contrast', contrast), op('brightness', brightness), op('saturate', 1.028)],
+    layers: [{ kind: 'solid', color: [170, 170, 170, 1], blend: 'multiply' }], // ≈0.666 por canal
+  };
+}
+
+// "The Motto" (rodada 4): smear HORIZONTAL (direção PROVADA por anisotropia — ref gy/gx=3.5 vs base
+// 0.59) com ECO/fantasma: smear principal curto + cluster de eco LARGO deslocado (o ghosting do
+// filtro real, que smear linear puro não tem — 1º fit dava aniso 8.2 e foi reprovado) + softBlur
+// leve (suavidade geral/perpendicular). Fiel = fit + ajuste visual: anisotropia EXATA (3.418 vs
+// 3.414), MAE 11.8/10.6/11.4. Variantes escalam o conjunto espacial (smear/eco/softBlur) + contraste.
+// É o filtro mais caro do app (24 taps de motion + 12 de softBlur por pixel) — ainda fração de
+// frame em GPU real a ≤2MP.
+function theMotto(id: string, name: string, contrast: number, mLen: number, eOff: number, eLen: number, sAmt: number): IgFilterDef {
+  return {
+    id,
+    name,
+    ops: [op('contrast', contrast), op('brightness', 0.756), op('saturate', 1.226)],
+    layers: [],
+    motionBlur: { angle: 0, length: mLen, echo: { offset: eOff, length: eLen, amount: 0.494 } },
+    softBlur: { radius: 0.006, amount: sAmt },
+  };
+}
+
+// "ВУИ" (rodada 3/4): P&B + leve contraste + escurecimento forte; o fit zerou a vinheta (edge=1 —
+// bound superior evita "anel de brilho" overfitado). MAE 6.1 (R=G=B). Variantes escalam o desvio
+// do tom (brightness/contraste).
+function byu(id: string, name: string, contrast: number, brightness: number): IgFilterDef {
+  return {
+    id,
+    name,
+    ops: [op('grayscale', 1), op('contrast', contrast), op('brightness', brightness)],
+    layers: [],
+  };
+}
+
+export const AR_FILTERS: IgFilterDef[] = [
+  // ---- Dark Sharp (rodada 2) ----
+  // O look: mais escuro, contraste alto, levemente dessaturado, bordas frias (vinheta radial) e
+  // realce forte de textura/linhas via `clarity` (unsharp de raio largo em luminância, ~1.6% da
+  // largura). O sharpen 1px extra é decisão de produto (Weslley): micro-nitidez além da textura de
+  // raio largo em fotos full-res. Fiel: MAE 5.9/4.4/4.5; contraste local 15.2 = referência.
+  // Variantes: clarity/contraste/sharpen +35%/+70% (contraste local +14%/+28% vs referência).
   darkSharp('dark-sharp-fiel', 'Dark Sharp Fiel', 0.702, 1.246, 0.15),
   darkSharp('dark-sharp-forte', 'Dark Sharp Forte', 0.947, 1.333, 0.203),
   darkSharp('dark-sharp-max', 'Dark Sharp Max', 1.193, 1.419, 0.255),
+  // ---- Slim Black iOS (com relógio — ver comentário da factory) ----
+  slimBlack('slim-black-fiel', 'Slim Black iOS Fiel', 0.963, 0.657),
+  slimBlack('slim-black-forte', 'Slim Black iOS Forte', 0.95, 0.537),
+  slimBlack('slim-black-max', 'Slim Black iOS Max', 0.937, 0.416),
+  // ---- The Motto ----
+  theMotto('the-motto-fiel', 'The Motto Fiel', 0.954, 0.014, 0.024, 0.0382, 0.2),
+  theMotto('the-motto-forte', 'The Motto Forte', 0.938, 0.0189, 0.0324, 0.0516, 0.27),
+  theMotto('the-motto-max', 'The Motto Max', 0.921, 0.0238, 0.0408, 0.065, 0.34),
+  // ---- ВУИ ----
+  byu('byu-fiel', 'ВУИ Fiel', 1.052, 0.649),
+  byu('byu-forte', 'ВУИ Forte', 1.071, 0.526),
+  byu('byu-max', 'ВУИ Max', 1.089, 0.403),
+];
+
+export const IG_FILTERS: IgFilterDef[] = [
   // ---- CSSgram (valores exatos do css publicado) ----
   {
     id: 'ig-clarendon',
@@ -293,4 +364,44 @@ export const IG_FILTERS: IgFilterDef[] = [
   },
 ];
 
-export const igFilterById = (id: string): IgFilterDef | null => IG_FILTERS.find((f) => f.id === id) ?? null;
+// ---- PENDENTE de aprovação (fora do carrossel; resolvível pelo renderer só pra prévias) ----
+// O Aesthetic Blur foi REPROVADO 2x pelo Weslley ("bem diferente" da referência) — a def abaixo é o
+// melhor candidato até aqui e fica FORA da UI até um candidato ser aprovado (rodada 5: varredura
+// c1..c6 de blur × névoa nas prévias).
+export const R3_FILTERS: IgFilterDef[] = [
+  // "Aesthetic Blur" (11.png; r4, refit após feedback "fraco/sem névoa"): soft focus/glow (softBlur
+  // r 1.5% da largura, amount 0.55) + NÉVOA/haze (camada screen que eleva os pretos — p5 da luma
+  // 6 vs 7 da ref; base era ~1) + radial multiply com CENTRO morno → borda fria/escura (tint e
+  // vinheta numa camada só) + dessaturação. Parâmetros = fit numérico + ITERAÇÃO VISUAL (pedido do
+  // Weslley): o ótimo numérico (r 0.027/amt 0.75) borrava MUITO mais que a ref no lado a lado — as
+  // métricas de gradiente enganaram (JPEG da ref infla alta frequência; anel de 13 taps ≠ glow) —
+  // blur reduzido e névoa reforçada dão o melhor MAE de todos os candidatos: 8.8/8.1/8.2 (contra a
+  // cópia JPEG 700px — o PNG original foi perdido com o image-cache; ver fit-r4.mjs). Fit devolvia
+  // centro R=1.037 (>1, irrepresentável em cor 0..255) — renormalizado (gradiente ÷1.037,
+  // brightness ×1.037 = 0.757), métricas idênticas. Limite conhecido: o blur real tem componente
+  // direcional (aniso ref 1.84 vs ~0.5 do nosso isotrópico) — só com 2º pass.
+  {
+    id: 'aesthetic-blur',
+    name: 'Aesthetic Blur',
+    ops: [op('contrast', 1.14), op('brightness', 0.757), op('saturate', 0.751)],
+    layers: [
+      {
+        kind: 'radial', // centro morno → borda fria; rampa longa (t1≈1.9 → ~metade até o canto)
+        center: [0.5, 0.5],
+        stops: [
+          { color: [255, 235, 235, 1], pos: 0 },
+          { color: [182, 205, 221, 1], pos: 1.9 },
+        ],
+        blend: 'multiply',
+      },
+      { kind: 'solid', color: [9, 22, 4, 1], blend: 'screen' }, // névoa: eleva os pretos (p5 6/7)
+    ],
+    softBlur: { radius: 0.015, amount: 0.55 },
+  },
+];
+
+export const igFilterById = (id: string): IgFilterDef | null =>
+  AR_FILTERS.find((f) => f.id === id) ??
+  IG_FILTERS.find((f) => f.id === id) ??
+  R3_FILTERS.find((f) => f.id === id) ??
+  null;

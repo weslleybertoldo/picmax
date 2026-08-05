@@ -32,6 +32,18 @@ uniform vec4 uIgL1Meta, uIgL1Geo, uIgL1Stops, uIgL1C0, uIgL1C1, uIgL1C2;
 // uClarityRad = raio do anel de blur em UV (x, y pré-escalado no JS pra ficar circular em px).
 uniform float uClarity;
 uniform vec2 uClarityRad;
+// motion blur direcional (v1.1 r3/r4 — "The Motto"): smear principal de 16 taps ao longo de
+// uMotionStep + cluster de ECO opcional (r4: 8 taps deslocados uEchoOff, misturados por uEchoAmt —
+// o fantasma/eco que o smear linear puro não tem; total continua 24 fetches). uMotionOn 0 = desligado.
+uniform float uMotionOn;
+uniform vec2 uMotionStep;
+uniform float uEchoAmt;
+uniform vec2 uEchoOff;
+uniform vec2 uEchoStep;
+// soft blur / soft focus (v1.1 r3 — "Aesthetic Blur"): média de 13 amostras (centro + anel 8 no raio
+// cheio + 4 a meio raio), misturada com a original por uSoftAmount. 0 = desligado.
+uniform float uSoftAmount;
+uniform vec2 uSoftRad;
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 vec3 adjust(vec3 c) {
   c *= pow(2.0, uExposure); c += uBrightness;
@@ -139,6 +151,42 @@ vec3 igApply(vec3 c) {
 }
 void main() {
   vec3 c = texture2D(uImage, vUv).rgb;
+  // blurs de base (v1.1 r3) rodam ANTES de sharpen/clarity/ajustes — são o "novo pixel de origem".
+  // Branch uniforme: custo zero quando o filtro ativo não define o efeito.
+  if (uMotionOn > 0.5) { // smear direcional 16 taps centrados no pixel (CLAMP_TO_EDGE cobre a borda)
+    vec3 acc = vec3(0.0);
+    vec2 p = vUv - uMotionStep * 7.5;
+    for (int i = 0; i < 16; i++) {
+      acc += texture2D(uImage, p).rgb;
+      p += uMotionStep;
+    }
+    c = acc / 16.0;
+    if (uEchoAmt > 0.0) { // eco/fantasma (r4): cluster curto deslocado, misturado por cima
+      vec3 eco = vec3(0.0);
+      vec2 q = vUv + uEchoOff - uEchoStep * 3.5;
+      for (int i = 0; i < 8; i++) {
+        eco += texture2D(uImage, q).rgb;
+        q += uEchoStep;
+      }
+      c = mix(c, eco / 8.0, uEchoAmt);
+    }
+  }
+  if (uSoftAmount > 0.0) { // soft focus: média do vizinho largo misturada de volta (glow suave)
+    vec3 acc = c
+      + texture2D(uImage, vUv + vec2( uSoftRad.x, 0.0)).rgb
+      + texture2D(uImage, vUv + vec2(-uSoftRad.x, 0.0)).rgb
+      + texture2D(uImage, vUv + vec2(0.0,  uSoftRad.y)).rgb
+      + texture2D(uImage, vUv + vec2(0.0, -uSoftRad.y)).rgb
+      + texture2D(uImage, vUv + uSoftRad * vec2( 0.7071,  0.7071)).rgb
+      + texture2D(uImage, vUv + uSoftRad * vec2(-0.7071,  0.7071)).rgb
+      + texture2D(uImage, vUv + uSoftRad * vec2( 0.7071, -0.7071)).rgb
+      + texture2D(uImage, vUv + uSoftRad * vec2(-0.7071, -0.7071)).rgb
+      + texture2D(uImage, vUv + vec2( uSoftRad.x * 0.5, 0.0)).rgb
+      + texture2D(uImage, vUv + vec2(-uSoftRad.x * 0.5, 0.0)).rgb
+      + texture2D(uImage, vUv + vec2(0.0,  uSoftRad.y * 0.5)).rgb
+      + texture2D(uImage, vUv + vec2(0.0, -uSoftRad.y * 0.5)).rgb;
+    c = mix(c, acc / 13.0, uSoftAmount);
+  }
   if (uSharpness > 0.0) {
     vec3 n = texture2D(uImage, vUv + vec2(0.0, uTexel.y)).rgb + texture2D(uImage, vUv - vec2(0.0, uTexel.y)).rgb
            + texture2D(uImage, vUv + vec2(uTexel.x, 0.0)).rgb + texture2D(uImage, vUv - vec2(uTexel.x, 0.0)).rgb;

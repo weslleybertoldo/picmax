@@ -20,6 +20,8 @@ import FilterPanel from '../tools/FilterPanel';
 import AnnotatePanel from '../tools/AnnotatePanel';
 import EnhancePanel from '../tools/EnhancePanel';
 import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type AnnotateTool } from '../annotate/AnnotationCanvas';
+import ClockOverlay from '../tools/ClockOverlay';
+import { isClockFilter } from '../engine/clockOverlay';
 
 function exportFileName(mime: string): string {
   return `PicMax_${Date.now()}.${mime === 'image/png' ? 'png' : 'jpg'}`;
@@ -185,6 +187,13 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
   // dedos = gesto de outra natureza, nunca um tap). Sair do modo original é automático em qualquer
   // ação de edição — ver dispatchEdit abaixo.
   const [showOriginal, setShowOriginal] = useState(false);
+  // Relógio do Slim Black iOS (v1.1 r4): instante capturado quando o filtro ATIVA (spec: data/hora
+  // do momento da aplicação) — preview e export usam o MESMO instante. Ref + state: o state monta o
+  // overlay; a ref dá o instante pro export sem depender de re-render.
+  const clockAppliedAtRef = useRef<Date | null>(null);
+  const filterIsClock = isClockFilter(history.present.filter?.id);
+  if (filterIsClock && clockAppliedAtRef.current === null) clockAppliedAtRef.current = new Date();
+  if (!filterIsClock && clockAppliedAtRef.current !== null) clockAppliedAtRef.current = null;
   const tapRef = useRef<{ pointerId: number; x: number; y: number; t: number } | null>(null);
 
   useEffect(() => {
@@ -403,7 +412,7 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
     if (exportBusy) return;
     setExportBusy('export');
     try {
-      const blob = await exportImage(image, exportSnapshot(maxSide));
+      const blob = await exportImage(image, exportSnapshot(maxSide), { clockDate: clockAppliedAtRef.current ?? undefined });
       if (Capacitor.isNativePlatform()) {
         const base64 = await blobToBase64(blob);
         await ImageEnhancer.saveToGallery({ base64, mime: blob.type });
@@ -435,7 +444,7 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
     if (exportBusy) return;
     setExportBusy('share');
     try {
-      const blob = await exportImage(image, exportSnapshot(maxSide));
+      const blob = await exportImage(image, exportSnapshot(maxSide), { clockDate: clockAppliedAtRef.current ?? undefined });
       const base64 = await blobToBase64(blob);
       const { uri } = await Filesystem.writeFile({
         path: exportFileName(blob.type),
@@ -693,6 +702,11 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
             também DIFERENTE do frame em que as anotações foram desenhadas (elas fazem parte da edição,
             não do "original"). Sem esconder aqui, as anotações apareceriam fora de posição por cima da
             foto original enquanto o dedo segura. */}
+        {/* Relógio do Slim Black iOS: parte do look do filtro (r4) — some junto com o filtro nos
+            modos que mostram OUTRO frame (crop/antes-e-depois), igual às anotações. */}
+        {!cropMode && !showOriginal && filterIsClock && clockAppliedAtRef.current && (
+          <ClockOverlay canvasRef={canvasRef} containerRef={canvasWrapRef} appliedAt={clockAppliedAtRef.current} />
+        )}
         {!cropMode && !showOriginal && (
           <AnnotationCanvas
             canvasRef={canvasRef}
