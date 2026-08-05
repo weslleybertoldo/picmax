@@ -257,8 +257,9 @@ export const filterById = (id: string) => FILTERS.find(f => f.id === id) ?? null
 // - uUvMat (mat3) compõe, nesta ordem: crop (escala+offset do subretângulo UV) ∘
 //   rotação straighten (em torno de 0.5,0.5 com escala de cobertura
 //   s = cos|θ| + (max(w,h)/min(w,h))·sin|θ|) ∘ rot90 (troca de eixos) ∘ flips (espelha UV).
-// - Canvas dimensionado pro aspect do frame final (pós-crop/rot90); preview usa
-//   devicePixelRatio limitado a 2048 no lado maior; export usa resolução plena.
+// - Canvas dimensionado pro aspect do frame final (pós-crop/rot90); preview usa a
+//   resolução nativa da textura capada em 2048 no lado maior (cobre HiDPI; sem DPR
+//   explícito — decisão da T3); export usa resolução plena via opts.maxSide.
 // - Uniforms normalizados a partir do snapshot:
 //   brightness/100*0.35, contrast/100*0.6, saturation/100, exposure/100 (stops),
 //   temperature/100, shadows/100, highlights/100, sharpness/100, vignette/100*0.8.
