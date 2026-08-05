@@ -4,6 +4,7 @@ import { createRenderer } from '../engine/renderer';
 import { FILTERS } from '../engine/filters';
 import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, type EditAction, type EditSnapshot, type FilterOp } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
+import { useSliderGesture } from './useSliderGesture';
 
 export interface FilterPanelProps {
   present: EditSnapshot;
@@ -18,29 +19,36 @@ interface ThumbCache { original: string; filters: Record<string, string> }
 // segurar referência forte a ele no valor. O Editor desmonta este painel ao trocar de aba (ternário
 // de abas), então um useState/useRef comum morreria a cada Ajustes↔Filtros; WeakMap resolve isso
 // e ainda invalida sozinho quando o bitmap morre (GC) — troca de foto regenera naturalmente, sem
-// precisar limpar a entrada manualmente.
+// precisar limpar a entrada manualmente. Só entra no cache uma geração COMPLETA (ver efeito abaixo) —
+// falha ou cancelamento no meio do caminho nunca grava entrada parcial.
 const thumbCache = new WeakMap<ImageBitmap, ThumbCache>();
 
 export default function FilterPanel({ present, dispatch, image }: FilterPanelProps) {
   const [originalThumb, setOriginalThumb] = useState<string | null>(null);
   const [filterThumbs, setFilterThumbs] = useState<Record<string, string>>({});
+  const [genError, setGenError] = useState(false);
+  // incrementado pelo botão "Tentar de novo" pra forçar o efeito de geração a rodar de novo pra
+  // MESMA imagem (o efeito só depende de `image`, que não mudou).
+  const [retryToken, setRetryToken] = useState(0);
   // Cópia "viva" de present.filter — mesma técnica do AdjustPanel (liveRef): evita que 2 dispatches
   // síncronos no mesmo tick (ex.: cancelGesture seguido de outro toque) leiam um `present` que o React
   // ainda não repropagou. Aqui o "patch" é o objeto filter inteiro (id+intensity), não uma chave.
   const liveRef = useRef(present.filter);
   liveRef.current = present.filter; // resync a cada render (fonte de verdade quando nenhum gesto está em voo)
-  // intensidade do filtro ATIVO antes do gesto de slider em curso; null = nenhum gesto em andamento.
-  const baselineRef = useRef<number | null>(null);
 
   // Gera as miniaturas 1x por imagem (não por render, não por remount): thumb base derivada do bitmap
   // de preview já carregado (mais barato que reprocessar o blob original) + 1 render offscreen por
   // filtro a 100%. Cache-hit (revisita da aba) usa o resultado do WeakMap direto — zero createRenderer,
-  // zero toDataURL.
+  // zero toDataURL. Qualquer exceção no meio (createImageBitmap/setImage/toDataURL, ex.: canvas sem
+  // memória, WebGL indisponível) cai no catch: mostra erro visível no carrossel em vez de deixar
+  // cards vazios pra sempre (a promise da IIFE nunca era esperada por ninguém — sem o catch, virava
+  // unhandled rejection e o usuário via só um carrossel quebrado, sem explicação nem saída).
   useEffect(() => {
     const cached = thumbCache.get(image.bitmap);
     if (cached) {
       setOriginalThumb(cached.original);
       setFilterThumbs(cached.filters);
+      setGenError(false);
       return; // já em cache: nada a gerar, nada a destruir no cleanup (nenhum renderer foi criado)
     }
 
@@ -48,63 +56,94 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
     let renderer: ReturnType<typeof createRenderer> | null = null;
     setOriginalThumb(null);
     setFilterThumbs({});
+    setGenError(false);
 
     (async () => {
-      // resizeWidth só (sem resizeHeight): o spec de createImageBitmap deriva a altura mantendo o aspecto.
-      const thumbBitmap = await createImageBitmap(image.bitmap, { resizeWidth: THUMB_WIDTH, resizeQuality: 'high' });
-      if (cancelled) { thumbBitmap.close(); return; }
-
-      const originalCanvas = document.createElement('canvas');
-      originalCanvas.width = thumbBitmap.width;
-      originalCanvas.height = thumbBitmap.height;
-      originalCanvas.getContext('2d')?.drawImage(thumbBitmap, 0, 0);
-      // PNG (não jpeg) pro card "Original": além de sem perdas num thumb tão pequeno, distingue
-      // visualmente/por seletor os 2 tipos de miniatura (a original não passou pelo pipeline WebGL).
-      const originalUrl = originalCanvas.toDataURL('image/png');
-      setOriginalThumb(originalUrl);
-
-      // renderer offscreen compartilhado (canvas fora da árvore) — descartável, por isso destroy({loseContext:true}).
-      const offCanvas = document.createElement('canvas');
+      let thumbBitmap: ImageBitmap | null = null;
       try {
-        renderer = createRenderer(offCanvas);
-      } catch {
-        thumbBitmap.close();
-        if (!cancelled) thumbCache.set(image.bitmap, { original: originalUrl, filters: {} }); // sem WebGL: não vale retentar
-        return; // fica só com a miniatura "Original"
-      }
-      renderer.setImage(thumbBitmap); // texImage2D copia os pixels de imediato — seguro fechar já a seguir
-      thumbBitmap.close();
+        // resizeWidth só (sem resizeHeight): o spec de createImageBitmap deriva a altura mantendo o aspecto.
+        thumbBitmap = await createImageBitmap(image.bitmap, { resizeWidth: THUMB_WIDTH, resizeQuality: 'high' });
+        if (cancelled) return;
 
-      // IMPORTANTE (decisão de design): as miniaturas mostram o filtro PURO, com ajustes/geometria
-      // default — não os ajustes atuais do usuário. A miniatura representa o filtro em si, não o
-      // resultado final da edição (senão mudaria a cada slider da aba Ajustes, muito custoso).
-      const filters: Record<string, string> = {};
-      for (let i = 0; i < FILTERS.length; i++) {
-        if (cancelled) break;
-        const f = FILTERS[i];
-        renderer.render({
-          geometry: DEFAULT_GEOMETRY,
-          adjustments: DEFAULT_ADJUSTMENTS,
-          filter: { id: f.id, intensity: 100 },
-          annotations: [],
-          baseVersion: 0,
-        });
-        const url = offCanvas.toDataURL('image/jpeg', 0.8);
-        if (cancelled) break;
-        filters[f.id] = url;
-        setFilterThumbs((prev) => ({ ...prev, [f.id]: url }));
-        if (i % 4 === 3) await new Promise((r) => setTimeout(r)); // libera a UI a cada 4 miniaturas
+        const originalCanvas = document.createElement('canvas');
+        originalCanvas.width = thumbBitmap.width;
+        originalCanvas.height = thumbBitmap.height;
+        originalCanvas.getContext('2d')?.drawImage(thumbBitmap, 0, 0);
+        // PNG (não jpeg) pro card "Original": além de sem perdas num thumb tão pequeno, distingue
+        // visualmente/por seletor os 2 tipos de miniatura (a original não passou pelo pipeline WebGL).
+        const originalUrl = originalCanvas.toDataURL('image/png');
+        if (cancelled) return;
+        setOriginalThumb(originalUrl);
+
+        // renderer offscreen compartilhado (canvas fora da árvore) — descartável, por isso destroy() no finally.
+        const offCanvas = document.createElement('canvas');
+        renderer = createRenderer(offCanvas); // pode lançar (sem WebGL) — cai no catch de fora
+        renderer.setImage(thumbBitmap);
+
+        // IMPORTANTE (decisão de design): as miniaturas mostram o filtro PURO, com ajustes/geometria
+        // default — não os ajustes atuais do usuário. A miniatura representa o filtro em si, não o
+        // resultado final da edição (senão mudaria a cada slider da aba Ajustes, muito custoso).
+        const filters: Record<string, string> = {};
+        for (let i = 0; i < FILTERS.length; i++) {
+          if (cancelled) break;
+          const f = FILTERS[i];
+          renderer.render({
+            geometry: DEFAULT_GEOMETRY,
+            adjustments: DEFAULT_ADJUSTMENTS,
+            filter: { id: f.id, intensity: 100 },
+            annotations: [],
+            baseVersion: 0,
+          });
+          const url = offCanvas.toDataURL('image/jpeg', 0.8);
+          if (cancelled) break;
+          filters[f.id] = url;
+          setFilterThumbs((prev) => ({ ...prev, [f.id]: url }));
+          if (i % 4 === 3) await new Promise((r) => setTimeout(r)); // libera a UI a cada 4 miniaturas
+        }
+        // só grava no cache se completou as 20 sem interrupção — cancelado no meio (troca de foto antes
+        // de terminar) não deixa entrada parcial; a próxima montagem pra essa imagem gera tudo de novo.
+        if (!cancelled) thumbCache.set(image.bitmap, { original: originalUrl, filters });
+      } catch (err) {
+        if (!cancelled) {
+          console.error('[FilterPanel] falha ao gerar miniaturas:', err);
+          setGenError(true);
+        }
+      } finally {
+        thumbBitmap?.close(); // close() é idempotente (no-op se já fechado) — seguro mesmo já tendo sido chamado antes
+        renderer?.destroy({ loseContext: true }); // destrói já ao terminar a geração, não só no cleanup do efeito
+        renderer = null;
       }
-      // só grava no cache se completou as 20 sem interrupção — cancelado no meio (troca de foto antes
-      // de terminar) não deixa entrada parcial; a próxima montagem pra essa imagem gera tudo de novo.
-      if (!cancelled) thumbCache.set(image.bitmap, { original: originalUrl, filters });
     })();
 
     return () => {
       cancelled = true;
-      renderer?.destroy({ loseContext: true });
+      renderer?.destroy({ loseContext: true }); // cobre o caso de unmount/troca de imagem NO MEIO da geração
     };
-  }, [image]);
+  }, [image, retryToken]);
+
+  function retryGeneration() {
+    thumbCache.delete(image.bitmap); // defensivo: geração falha nunca grava, mas garante que um retry nunca reusa lixo
+    setGenError(false);
+    setRetryToken((n) => n + 1);
+  }
+
+  const gesture = useSliderGesture<string>({
+    getCurrent: () => (liveRef.current ? { target: liveRef.current.id, value: liveRef.current.intensity } : null),
+    onPreview: (value) => {
+      const id = liveRef.current?.id;
+      if (!id) return;
+      const next: FilterOp = { id, intensity: value };
+      liveRef.current = next; // visível pra próxima chamada ANTES do re-render
+      dispatch({ type: 'preview', patch: { filter: next } });
+    },
+    onSet: (value) => {
+      const id = liveRef.current?.id;
+      if (!id) return;
+      const next: FilterOp = { id, intensity: value };
+      liveRef.current = next;
+      dispatch({ type: 'set', patch: { filter: next } });
+    },
+  });
 
   // Tocar num card: Original → filter null; um filtro → sempre volta pra intensidade 100 (mesmo se
   // já era o ativo, ex.: usuário tinha arrastado o slider e toca o card de novo). Só pula o dispatch
@@ -121,46 +160,6 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
     const next: FilterOp = { id, intensity: 100 };
     liveRef.current = next;
     dispatch({ type: 'set', patch: { filter: next } });
-  }
-
-  function captureBaseline() {
-    if (baselineRef.current !== null || !liveRef.current) return;
-    baselineRef.current = liveRef.current.intensity;
-  }
-
-  function previewIntensity(value: number) {
-    const id = liveRef.current?.id;
-    if (!id) return;
-    const next: FilterOp = { id, intensity: value };
-    liveRef.current = next; // visível pra próxima chamada ANTES do re-render
-    dispatch({ type: 'preview', patch: { filter: next } });
-  }
-
-  function commitIntensity(value: number) {
-    const baseline = baselineRef.current;
-    baselineRef.current = null;
-    const id = liveRef.current?.id;
-    if (!id || baseline === null) return;
-    if (baseline === value) return; // gesto sem mudança real: não registra entrada vazia no histórico
-    // Mesma técnica do AdjustPanel: 'preview' já reescreveu liveRef/present.filter pro valor arrastado —
-    // reverte pro baseline num dispatch de 'preview' ANTES do 'set', senão o histórico empilharia esse
-    // MESMO valor (present já mutado), virando um no-op (1º undo não desfaria nada).
-    liveRef.current = { id, intensity: baseline };
-    dispatch({ type: 'preview', patch: { filter: liveRef.current } });
-    const final: FilterOp = { id, intensity: value };
-    liveRef.current = final;
-    dispatch({ type: 'set', patch: { filter: final } });
-  }
-
-  // Gesto interrompido sem soltura normal (pointercancel / blur no meio de um keydown sem keyup):
-  // reverte o preview pro baseline e descarta o gesto SEM registrar 'set' (mesmo tratamento do AdjustPanel).
-  function cancelGesture() {
-    const baseline = baselineRef.current;
-    baselineRef.current = null;
-    const id = liveRef.current?.id;
-    if (baseline === null || !id) return;
-    liveRef.current = { id, intensity: baseline };
-    dispatch({ type: 'preview', patch: { filter: liveRef.current } });
   }
 
   const activeId = present.filter?.id ?? null;
@@ -196,6 +195,15 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
         ))}
       </div>
 
+      {genError && (
+        <div className="filter-error" data-testid="filter-thumbs-error">
+          <span>Falha ao gerar miniaturas</span>
+          <button type="button" className="btn btn-secondary" data-testid="filter-thumbs-retry" onClick={retryGeneration}>
+            Tentar de novo
+          </button>
+        </div>
+      )}
+
       {activeId !== null && (
         <div className="slider-row filter-intensity-row" data-testid="filter-intensity-row">
           <div className="slider-row-label">
@@ -209,13 +217,13 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
             step={1}
             value={intensity}
             data-testid="filter-intensity"
-            onPointerDown={captureBaseline}
-            onKeyDown={captureBaseline}
-            onInput={(e) => previewIntensity(Number(e.currentTarget.value))}
-            onPointerUp={(e) => commitIntensity(Number(e.currentTarget.value))}
-            onKeyUp={(e) => commitIntensity(Number(e.currentTarget.value))}
-            onPointerCancel={cancelGesture}
-            onBlur={cancelGesture}
+            onPointerDown={gesture.captureBaseline}
+            onKeyDown={gesture.captureBaseline}
+            onInput={(e) => gesture.preview(Number(e.currentTarget.value))}
+            onPointerUp={(e) => gesture.commit(Number(e.currentTarget.value))}
+            onKeyUp={(e) => gesture.commit(Number(e.currentTarget.value))}
+            onPointerCancel={gesture.cancelGesture}
+            onBlur={gesture.cancelGesture}
           />
         </div>
       )}

@@ -384,3 +384,22 @@ input[type='range']::-moz-range-thumb {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
+.filter-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
+  border-radius: 10px;
+  padding: 8px 10px 8px 14px;
+  font-size: 13px;
+  margin-top: 4px;
+}
+.filter-error .btn {
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
