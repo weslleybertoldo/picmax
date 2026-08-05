@@ -87,11 +87,25 @@ Java_com_bertoldo_picmax_ImageEnhancerPlugin_nativeCancel(JNIEnv*, jobject) {
     g_cancel = true;
 }
 
+// Reset da flag no INÍCIO do fluxo Kotlin (antes do nativeInit) — não dentro de nativeEnhance:
+// o init pode levar MINUTOS (1º uso em GPU lenta) e um cancel emitido durante ele era apagado
+// pelo reset tardio, fazendo a UI ficar em "Cancelando…" enquanto o enhance completava inteiro.
+// O retry GPU→CPU do Kotlin NÃO chama isto de novo: cancel na 1ª tentativa vale pra 2ª.
+extern "C" JNIEXPORT void JNICALL
+Java_com_bertoldo_picmax_ImageEnhancerPlugin_nativeResetCancel(JNIEnv*, jobject) {
+    g_cancel = false;
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_bertoldo_picmax_ImageEnhancerPlugin_nativeEnhance(JNIEnv* env, jobject thiz, jstring jin,
                                                            jstring jout, jint maxOutputSide) {
     if (!g_engine) return kError;
-    g_cancel = false;
+    // Cancel chegado durante o nativeInit (a flag é resetada ANTES do init, via nativeResetCancel):
+    // aborta aqui, antes de decodificar/processar qualquer tile.
+    if (g_cancel.load(std::memory_order_relaxed)) {
+        LOGI("cancelado antes do processamento");
+        return kCancelled;
+    }
 
     const std::string inPath = jstringToUtf8(env, jin);
     const std::string outPath = jstringToUtf8(env, jout);

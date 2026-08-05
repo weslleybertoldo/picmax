@@ -49,6 +49,7 @@ class ImageEnhancerPlugin : Plugin() {
     private external fun nativeInit(assetManager: android.content.res.AssetManager, useGpu: Boolean): Int
     private external fun nativeEnhance(inPath: String, outPath: String, maxOutputSide: Int): Int
     private external fun nativeCancel()
+    private external fun nativeResetCancel()
     private external fun nativeHasVulkan(): Boolean
 
     // Serializa: só UMA melhoria por vez (o engine nativo é um singleton de processo).
@@ -90,6 +91,12 @@ class ImageEnhancerPlugin : Plugin() {
         enhanceExecutor.execute {
             val outPath = File(context.cacheDir, "enhanced_${System.currentTimeMillis()}.jpg").absolutePath
             try {
+                // Reset do cancel AQUI (antes do init), não dentro do nativeEnhance: o init pode
+                // levar minutos (1º uso em GPU lenta) e um cancel emitido durante ele era apagado
+                // pelo reset tardio — a UI ficava em "Cancelando…" e o enhance completava inteiro.
+                // O nativeEnhance checa a flag logo na entrada e aborta com 2 sem processar tiles.
+                // NÃO resetar de novo no retry GPU→CPU abaixo: cancel na 1ª tentativa vale pra 2ª.
+                nativeResetCancel()
                 var useGpu = nativeHasVulkan()
                 usingGpu = useGpu
                 var rc = if (nativeInit(context.assets, useGpu) == 0) {
