@@ -115,7 +115,7 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   shadows: 0, highlights: 0, sharpness: 0, vignette: 0,
 };
 export interface FilterOp { id: string; intensity: number } // 0..100
-export interface CropRect { x: number; y: number; w: number; h: number } // fração 0..1 do frame pós-rotação
+export interface CropRect { x: number; y: number; w: number; h: number } // fração 0..1 do frame pós-rotação; x,y = canto sup. esquerdo, y cresce pra BAIXO (convenção DOM)
 export interface Geometry {
   rotate90: 0 | 1 | 2 | 3; flipH: boolean; flipV: boolean;
   straighten: number;            // graus -45..45
@@ -208,7 +208,7 @@ void main() {
   }
   c = adjust(c);
   if (uFIntensity > 0.0) c = mix(c, grade(c), uFIntensity);
-  c *= 1.0 - uVignette * smoothstep(0.35, 0.75, distance(vUv, vec2(0.5)));
+  c *= 1.0 - uVignette * smoothstep(0.35, 0.75, distance(vFrameUv, vec2(0.5))); // vFrameUv = UV do frame (varying do VERT), não da textura — senão a vinheta some com crop
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 ```
@@ -291,10 +291,17 @@ export async function openImage(source: 'gallery' | 'camera'): Promise<LoadedIma
   }).catch(() => null);
   if (!photo?.webPath) return null;
   const blob = await (await fetch(photo.webPath)).blob();
-  const bitmap = await createImageBitmap(blob);
-  return { bitmap, blob, width: bitmap.width, height: bitmap.height };
+  // preview reduzido (≤2048 no lado maior, orientação EXIF aplicada) — full-res só no export/IA, a partir do blob
+  const probe = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, 2048 / Math.max(probe.width, probe.height));
+  const bitmap = scale < 1
+    ? await createImageBitmap(blob, { imageOrientation: 'from-image', resizeWidth: Math.round(probe.width * scale), resizeHeight: Math.round(probe.height * scale) })
+    : probe;
+  if (bitmap !== probe) probe.close();
+  return { bitmap, blob, width: probe.width, height: probe.height }; // width/height = dimensões REAIS (full-res)
 }
 ```
+Convenções do engine (fechadas na T3): crop y-down; flips em eixo de tela; straighten + = anti-horário; VRAM: textura de preview vem do bitmap reduzido.
 
 - [ ] **Step 2: Home** — tema escuro (fundo `#0d0d0f`, acentos em gradiente laranja→rosa→azul, combinando com a logo). Dois botões grandes ("Abrir da galeria", "Tirar foto") chamando `openImage` e navegando pro Editor (estado no App: `image: LoadedImage | null`).
 
