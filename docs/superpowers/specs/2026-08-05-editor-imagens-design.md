@@ -1,7 +1,7 @@
-# FotoLab — Editor de Imagens Android Offline
+# PicMax — Editor de Imagens Android Offline
 
 **Data:** 2026-08-05 · **Status:** aprovado (design validado com Weslley)
-**Nome provisório:** FotoLab (renomeável antes do release)
+**Nome:** PicMax · logo em `assets/logo.png`
 
 ## Objetivo
 
@@ -70,7 +70,7 @@ Sem backend, sem API paga, sem coleta de dados. Distribuição: APK direto (sem 
 
 ### Export
 
-- Salvar cópia na galeria via MediaStore (álbum "FotoLab"), JPEG qualidade 90 (PNG se original for PNG). Original intocado.
+- Salvar cópia na galeria via MediaStore (álbum "PicMax"), JPEG qualidade 90 (PNG se original for PNG). Original intocado.
 - Botão compartilhar (share sheet nativo).
 
 ## Telas
