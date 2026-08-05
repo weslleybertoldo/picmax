@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="my_images" path="." />
+    <!-- 1 único cache-path cobrindo TODO o cacheDir (path="."): usado pelo export/share (T8, JPEGs
+         exportados) e pela atualização in-app (T13, update.apk pro PackageInstaller) — os 2 usos
+         mapeiam pro MESMO diretório raiz, então 1 entry basta (review T12, fix 12: tinha 2 cache-path
+         redundantes, "my_cache_images" e "apk_cache", ambas path="."). -->
     <cache-path name="my_cache_images" path="." />
-    <!-- Atualização in-app (T13): expõe o cacheDir/update.apk pro PackageInstaller via FileProvider -->
-    <cache-path name="apk_cache" path="." />
 </paths>

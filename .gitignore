@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Secrets e keystores (T12, review — fix 10): android/.gitignore já cobre *.keystore/*.jks dentro de
+# android/, mas o raiz não tinha nada — reforça pra QUALQUER lugar do repo (defesa em profundidade,
+# não custa duplicar um padrão tão barato de errar).
+.env*
+*.keystore
+*.jks
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

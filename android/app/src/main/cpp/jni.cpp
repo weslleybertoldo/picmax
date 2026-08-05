@@ -183,6 +183,17 @@ Java_com_bertoldo_picmax_ImageEnhancerPlugin_nativeEnhance(JNIEnv* env, jobject 
     // tilesize>32 pra nunca tentar 2x com um tile já degenerado. tilesize é restaurado depois: o
     // engine é CACHEADO entre chamadas (ver nativeInit) e o próximo enhance não deve herdar o tile
     // reduzido desta falha.
+    //
+    // ⚠️ AMPLIFICAÇÃO (T12, review — fix 13): este retry NÃO é o único no caminho da IA — o Kotlin
+    // (ImageEnhancerPlugin.enhance) já tenta a mesma imagem 2x no nível GPU→CPU quando rc==1 na GPU.
+    // As duas camadas se compõem: (1ª tentativa GPU, tilesize normal) falha → (2ª tentativa GPU,
+    // tilesize/2, ESTE retry) falha → Kotlin troca pra CPU → (3ª tentativa CPU, tilesize normal) falha
+    // → (4ª tentativa CPU, tilesize/2, ESTE retry de novo) falha → só então rejeita "falha na IA". Pior
+    // caso: ATÉ 4 inferências completas da imagem antes de desistir — em hardware modesto/imagem
+    // grande, isso pode multiplicar o tempo de espera do usuário por até 4x antes do erro final
+    // aparecer (o modal mostra "Melhorando com IA…" o tempo todo, sem diferenciar qual tentativa está
+    // rodando). Aceito como trade-off v1 (mais chances de sucesso > tempo de espera num caminho que já
+    // é de erro), mas registrado aqui pra quem for debugar "por que demorou tanto pra falhar".
     if (rc == kError && g_engine->tilesize > 32) {
         const int originalTilesize = g_engine->tilesize;
         g_engine->tilesize = std::max(32, originalTilesize / 2);
