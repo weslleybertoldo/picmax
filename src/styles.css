@@ -682,3 +682,53 @@ input[type='range']::-moz-range-thumb {
 .annotate-clear {
   align-self: center;
 }
+
+/* ---------- EnhancePanel (T9: auto-ajuste instantâneo; T10 liga o card de IA) ---------- */
+.enhance-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+.enhance-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--bg-elevated);
+}
+.enhance-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.enhance-card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.enhance-card-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.enhance-card-btn {
+  margin-top: 2px;
+}
+.enhance-card-ai {
+  opacity: 0.85;
+}
+.enhance-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}

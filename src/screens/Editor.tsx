@@ -15,6 +15,7 @@ import { useCanvasBox } from '../tools/canvasGeometry';
 import AdjustPanel from '../tools/AdjustPanel';
 import FilterPanel from '../tools/FilterPanel';
 import AnnotatePanel from '../tools/AnnotatePanel';
+import EnhancePanel from '../tools/EnhancePanel';
 import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type AnnotateTool } from '../annotate/AnnotationCanvas';
 
 // blob -> base64 SEM o prefixo "data:...;base64," (é o que o plugin Kotlin espera em `base64`, ver
@@ -356,7 +357,7 @@ export default function Editor({ image, onBack }: EditorProps) {
                 onSizeChange={setAnnotateSize}
               />
             ) : (
-              <p className="panel-placeholder">Em breve</p>
+              <EnhancePanel present={history.present} dispatch={dispatch} image={image} />
             )}
           </div>
 
