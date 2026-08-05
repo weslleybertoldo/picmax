@@ -67,10 +67,16 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
     // corrompia a seleção (o flip espelha em torno do centro do FRAME cheio, não do centro do próprio
     // retângulo de crop — ver prova/derivação em state/editStack.ts). mirrorCropRect mantém a região
     // visual: Espelhar H mirra crop.x, Espelhar V mirra crop.y (regra igual pra qualquer rotate90 atual).
+    // 3ª rodada de review: flip e straighten (Endireitar) TAMBÉM não comutam (F·S(θ) = S(−θ)·F) — com
+    // straighten≠0, espelhar sem negar o ângulo corrompia o crop (fuzz do reviewer: 26176/29511
+    // sequências falhando, replicado em scripts/verify-geometry.mjs). Negar `straighten` no MESMO
+    // dispatch fecha a comutação — e é a UX correta: espelhar a foto espelha a inclinação do
+    // horizonte junto (rodar scripts/verify-geometry.mjs valida isso pra todas as sequências).
     const next: Geometry = {
       ...g,
       [axis]: !g[axis],
       crop: g.crop ? mirrorCropRect(g.crop, axis === 'flipH' ? 'x' : 'y') : null,
+      straighten: -g.straighten,
     };
     commitGeometry(next, false);
   }
