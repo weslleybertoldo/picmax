@@ -5,11 +5,12 @@ import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { createRenderer, type Renderer } from '../engine/renderer';
-import { editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
+import { DEFAULT_ADJUSTMENTS, editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import { blobToBase64 } from '../io/blobToBase64';
 import { exportImage } from '../io/exportImage';
 import { ImageEnhancer } from '../native/imageEnhancer';
+import { savePreset, type EditPreset } from '../presets/presets';
 import BasicPanel from '../tools/BasicPanel';
 import CropOverlay from '../tools/CropOverlay';
 import { useCanvasBox } from '../tools/canvasGeometry';
@@ -99,12 +100,29 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // (sucesso ou erro, nunca stack trace) — some sozinho depois de 3s (efeito abaixo).
   const [exportBusy, setExportBusy] = useState<'export' | 'share' | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
+  // Modelos (T11): modal de nome do "Salvar modelo" + contador que força a seção "Meus modelos" da
+  // aba Filtros a reler o storage sem remontar (ela só remonta ao trocar de aba — ver ternário de
+  // abas mais abaixo; sem isso, salvar um modelo com a aba Filtros já aberta deixaria a lista velha
+  // visível até o usuário sair e voltar pra aba).
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetsVersion, setPresetsVersion] = useState(0);
 
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Edição neutra (spec T11): todos os ajustes no default E sem filtro — nada a salvar como modelo.
+  // Crop/anotações/baseVersion (IA) ficam de fora dessa checagem de propósito: não fazem parte do
+  // modelo (são propriedades da FOTO, não da "receita" de cor reaplicável em qualquer imagem).
+  const isNeutralEdit =
+    history.present.filter === null &&
+    (Object.keys(DEFAULT_ADJUSTMENTS) as Array<keyof typeof DEFAULT_ADJUSTMENTS>).every(
+      (k) => history.present.adjustments[k] === DEFAULT_ADJUSTMENTS[k],
+    );
 
   // Hook de dev (T6, só em build DEV — tree-shaken em produção via import.meta.env.DEV): permite
   // injetar `annotations` fake por fora da UI (T7 ainda não existe) pra validar a guarda de
@@ -167,6 +185,35 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     const newIndex = bases.length;
     onAddBase(img);
     dispatch({ type: 'set', patch: { baseVersion: newIndex } });
+  }
+
+  // Aplicar modelo (T11): 1 dispatch 'set' com adjustments+filter do modelo — 1 entrada de histórico,
+  // desfazível como qualquer outra edição. Geometria/anotações/baseVersion do snapshot atual não são
+  // tocados (o modelo nunca inclui crop/anotações/IA, por design).
+  function handleApplyPreset(preset: EditPreset) {
+    dispatch({ type: 'set', patch: { adjustments: preset.adjustments, filter: preset.filter } });
+    setToast({ text: 'Modelo aplicado', kind: 'ok' });
+  }
+
+  function openSaveModal() {
+    setPresetName('');
+    setShowSaveModal(true);
+  }
+
+  async function confirmSavePreset() {
+    const name = presetName.trim().slice(0, 40);
+    if (!name || savingPreset) return;
+    setSavingPreset(true);
+    try {
+      await savePreset({ name, adjustments: history.present.adjustments, filter: history.present.filter });
+      setPresetsVersion((n) => n + 1);
+      setShowSaveModal(false);
+      setToast({ text: 'Modelo salvo ✓', kind: 'ok' });
+    } catch (e) {
+      setToast({ text: e instanceof Error ? e.message : 'Não foi possível salvar o modelo.', kind: 'error' });
+    } finally {
+      setSavingPreset(false);
+    }
   }
 
   function handleCropApply(crop: CropRect) {
@@ -265,6 +312,16 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
         <div className="editor-topbar-spacer" />
         <button
           type="button"
+          className="btn btn-icon"
+          data-testid="save-preset"
+          aria-label="Salvar modelo"
+          disabled={cropMode || isNeutralEdit}
+          onClick={openSaveModal}
+        >
+          🔖
+        </button>
+        <button
+          type="button"
           className="btn btn-secondary btn-export"
           data-testid="export"
           aria-label="Exportar"
@@ -288,6 +345,43 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
       {toast && (
         <div className={`toast toast-${toast.kind}`} data-testid="toast" role="status">
           {toast.text}
+        </div>
+      )}
+
+      {showSaveModal && (
+        <div className="text-modal-backdrop" data-testid="save-preset-modal">
+          <div className="text-modal">
+            <input
+              type="text"
+              className="text-modal-input"
+              data-testid="save-preset-input"
+              autoFocus
+              maxLength={40}
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Nome do modelo"
+            />
+            <div className="text-modal-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="save-preset-cancel"
+                disabled={savingPreset}
+                onClick={() => setShowSaveModal(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="save-preset-ok"
+                disabled={!presetName.trim() || savingPreset}
+                onClick={confirmSavePreset}
+              >
+                {savingPreset ? <span className="spinner" aria-hidden="true" /> : 'Salvar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -343,7 +437,13 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
             ) : activeTab === 'ajustes' ? (
               <AdjustPanel present={history.present} dispatch={dispatch} />
             ) : activeTab === 'filtros' ? (
-              <FilterPanel present={history.present} dispatch={dispatch} image={image} />
+              <FilterPanel
+                present={history.present}
+                dispatch={dispatch}
+                image={image}
+                onApplyPreset={handleApplyPreset}
+                presetsVersion={presetsVersion}
+              />
             ) : activeTab === 'anotar' ? (
               <AnnotatePanel
                 present={history.present}

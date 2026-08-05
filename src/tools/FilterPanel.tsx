@@ -4,12 +4,17 @@ import { createRenderer } from '../engine/renderer';
 import { FILTERS } from '../engine/filters';
 import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, type EditAction, type EditSnapshot, type FilterOp } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
+import PresetsPanel from '../presets/PresetsPanel';
+import type { EditPreset } from '../presets/presets';
 import { useSliderGesture } from './useSliderGesture';
 
 export interface FilterPanelProps {
   present: EditSnapshot;
   dispatch: Dispatch<EditAction>;
   image: LoadedImage;
+  onApplyPreset: (preset: EditPreset) => void;
+  // bump do Editor pra forçar a seção "Meus modelos" reler o storage sem remontar (ver PresetsPanel).
+  presetsVersion: number;
 }
 
 const THUMB_WIDTH = 128;
@@ -23,7 +28,7 @@ interface ThumbCache { original: string; filters: Record<string, string> }
 // falha ou cancelamento no meio do caminho nunca grava entrada parcial.
 const thumbCache = new WeakMap<ImageBitmap, ThumbCache>();
 
-export default function FilterPanel({ present, dispatch, image }: FilterPanelProps) {
+export default function FilterPanel({ present, dispatch, image, onApplyPreset, presetsVersion }: FilterPanelProps) {
   const [originalThumb, setOriginalThumb] = useState<string | null>(null);
   const [filterThumbs, setFilterThumbs] = useState<Record<string, string>>({});
   const [genError, setGenError] = useState(false);
@@ -167,6 +172,11 @@ export default function FilterPanel({ present, dispatch, image }: FilterPanelPro
 
   return (
     <div className="filter-panel">
+      {/* Seção "Meus modelos" (T11): some por completo quando não há modelos salvos (sem emptyMessage
+          — ver PresetsPanel). Tocar num card aplica adjustments+filter do modelo (1 entrada de
+          histórico, desfazível) — crop/anotações/base da IA nunca fazem parte do modelo. */}
+      <PresetsPanel variant="inline" title="Meus modelos" onApply={onApplyPreset} refreshKey={presetsVersion} />
+
       <div className="filter-carousel" data-testid="filter-carousel">
         <button
           type="button"

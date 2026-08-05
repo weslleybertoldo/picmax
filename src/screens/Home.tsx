@@ -1,6 +1,7 @@
 // src/screens/Home.tsx — tela inicial: abrir da galeria, tirar foto (e, em dev, imagem de teste)
 import { useState } from 'react';
 import { openImage, type LoadedImage } from '../io/openImage';
+import PresetsPanel from '../presets/PresetsPanel';
 
 export interface HomeProps {
   onImage: (image: LoadedImage) => void;
@@ -49,6 +50,10 @@ async function makeTestImage(): Promise<LoadedImage> {
 export default function Home({ onImage }: HomeProps) {
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
+  // Acesso à lista de modelos (T11) sem precisar de uma foto aberta — troca a Home pra uma tela
+  // simples de lista; tocar num modelo aqui não aplica nada (não há edição em curso), só mostra um
+  // hint (ver PresetsPanel: `onApply` ausente = modo "view").
+  const [showPresets, setShowPresets] = useState(false);
 
   async function handleOpen(source: 'gallery' | 'camera') {
     setError(null);
@@ -74,6 +79,31 @@ export default function Home({ onImage }: HomeProps) {
     } finally {
       setBusy(null);
     }
+  }
+
+  // Tela "Meus modelos" (T11): substitui a Home inteira em vez de sobrepor — não há foto aberta aqui,
+  // então não faz sentido dividir espaço com os botões de abrir imagem. Tocar num modelo não aplica
+  // nada (PresetsPanel sem `onApply`): só mostra o hint "Abra uma foto para aplicar".
+  if (showPresets) {
+    return (
+      <div className="home home-presets">
+        <div className="home-presets-topbar">
+          <button
+            type="button"
+            className="btn btn-icon"
+            data-testid="presets-back"
+            aria-label="Voltar"
+            onClick={() => setShowPresets(false)}
+          >
+            ←
+          </button>
+          <h2 className="home-presets-title">Meus modelos</h2>
+        </div>
+        <div className="home-presets-body">
+          <PresetsPanel variant="list" emptyMessage="Nenhum modelo salvo ainda." />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -103,6 +133,15 @@ export default function Home({ onImage }: HomeProps) {
           onClick={() => handleOpen('camera')}
         >
           {busy === 'camera' ? 'Abrindo câmera…' : 'Tirar foto'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          data-testid="open-presets"
+          disabled={busy !== null}
+          onClick={() => setShowPresets(true)}
+        >
+          Meus modelos
         </button>
         {import.meta.env.DEV && (
           <button
