@@ -16,6 +16,10 @@ export interface EditPreset {
 
 const KEY = 'picmax.presets';
 
+// Premissa: app single-user, sem processos concorrentes escrevendo a mesma key — por isso
+// list→modificar→set (savePreset/renamePreset/deletePreset) é read-modify-write SEM lock; seguro
+// aqui, mas quebraria sob escrita concorrente.
+
 // crypto.randomUUID só existe a partir do Chrome 92 — WebView alvo mínima é 83 (mesmo limite do
 // target es2019 do build, ver comentário em vite.config.ts e editStack.ts). Fallback simples e
 // suficiente pra um id local (não precisa ser um UUID de verdade, só único o bastante pra essa lista).
@@ -26,7 +30,15 @@ function genId(): string {
 
 export async function listPresets(): Promise<EditPreset[]> {
   const { value } = await Preferences.get({ key: KEY });
-  return value ? JSON.parse(value) : [];
+  if (!value) return [];
+  // Storage corrompido (JSON inválido — edição manual, migração futura, etc.) não pode travar
+  // save/rename/delete pra sempre: todos passam por listPresets() primeiro, então um throw aqui
+  // impediria QUALQUER escrita futura. Degrada pra lista vazia em vez de propagar a exceção.
+  try {
+    return JSON.parse(value);
+  } catch {
+    return [];
+  }
 }
 
 export async function savePreset(p: Omit<EditPreset, 'id' | 'createdAt'>): Promise<EditPreset> {

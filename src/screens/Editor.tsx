@@ -190,9 +190,12 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   // Aplicar modelo (T11): 1 dispatch 'set' com adjustments+filter do modelo — 1 entrada de histórico,
   // desfazível como qualquer outra edição. Geometria/anotações/baseVersion do snapshot atual não são
   // tocados (o modelo nunca inclui crop/anotações/IA, por design).
+  // Merge com DEFAULT_ADJUSTMENTS (forward-compat, review): um modelo salvo por uma versão anterior
+  // do schema de Adjustments (campo novo adicionado depois) chegaria aqui sem essa chave — sem o
+  // merge, o slider correspondente leria `undefined` (input não-controlado / NaN no render).
   function handleApplyPreset(preset: EditPreset) {
-    dispatch({ type: 'set', patch: { adjustments: preset.adjustments, filter: preset.filter } });
-    setToast({ text: 'Modelo aplicado', kind: 'ok' });
+    dispatch({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter: preset.filter } });
+    setToast({ text: 'Modelo aplicado ✓', kind: 'ok' });
   }
 
   function openSaveModal() {

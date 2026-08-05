@@ -35,9 +35,16 @@ export default function PresetsPanel({ variant, onApply, refreshKey, title, empt
 
   useEffect(() => {
     let cancelled = false;
-    listPresets().then((list) => {
-      if (!cancelled) setPresets(list);
-    });
+    listPresets()
+      .then((list) => {
+        if (!cancelled) setPresets(list);
+      })
+      // listPresets() já degrada JSON inválido pra [] internamente; este catch cobre a própria
+      // chamada ao plugin (Preferences.get rejeitando) — mostra lista vazia em vez de travar em
+      // loading pra sempre / estourar unhandled rejection.
+      .catch(() => {
+        if (!cancelled) setPresets([]);
+      });
     return () => {
       cancelled = true;
     };
