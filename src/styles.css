@@ -732,3 +732,26 @@ input[type='range']::-moz-range-thumb {
   padding: 3px 9px;
   white-space: nowrap;
 }
+.enhance-ai-error {
+  margin: 0;
+  font-size: 13px;
+  color: #ff6b6b;
+}
+
+/* ---------- Modal de progresso da IA (T10) — reusa o backdrop/card do text-modal ---------- */
+.ai-modal {
+  text-align: center;
+}
+.ai-progress-track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ai-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-gradient);
+  transition: width 0.25s ease;
+}

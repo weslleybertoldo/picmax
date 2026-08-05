@@ -4,6 +4,8 @@ apply plugin: 'org.jetbrains.kotlin.android' // Task 8: ImageEnhancerPlugin.kt
 android {
     namespace = "com.bertoldo.picmax"
     compileSdk = rootProject.ext.compileSdkVersion
+    // Task 10 (IA nativa): NDK fixado na versão instalada via sdkmanager (build reproduzível).
+    ndkVersion = "27.1.12297006"
     defaultConfig {
         applicationId "com.bertoldo.picmax"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -11,10 +13,22 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Task 10: arm64-v8a = devices reais; x86_64 = emulador (smoke test — AVD revapk30).
+        // Sem armeabi-v7a/x86: só vendoramos o prebuilt do NCNN pros 2 ABIs acima.
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // Task 10: lib nativa picmaxenhance (JNI + NCNN/Real-ESRGAN) — ver src/main/cpp/CMakeLists.txt.
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
         }
     }
     buildTypes {

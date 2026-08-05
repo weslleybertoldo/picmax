@@ -7,6 +7,7 @@ import { Share } from '@capacitor/share';
 import { createRenderer, type Renderer } from '../engine/renderer';
 import { editReducer, initialSnapshot, type CropRect, type EditAction, type EditSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
+import { blobToBase64 } from '../io/blobToBase64';
 import { exportImage } from '../io/exportImage';
 import { ImageEnhancer } from '../native/imageEnhancer';
 import BasicPanel from '../tools/BasicPanel';
@@ -18,30 +19,15 @@ import AnnotatePanel from '../tools/AnnotatePanel';
 import EnhancePanel from '../tools/EnhancePanel';
 import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type AnnotateTool } from '../annotate/AnnotationCanvas';
 
-// blob -> base64 SEM o prefixo "data:...;base64," (é o que o plugin Kotlin espera em `base64`, ver
-// ImageEnhancerPlugin.kt). FileReader (não arrayBuffer+btoa manual) porque é a via nativa mais barata
-// pra converter um Blob potencialmente grande (export full-res) sem estourar a pilha de argumentos de
-// String.fromCharCode.
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error('Falha ao ler o arquivo exportado.'));
-    reader.onloadend = () => {
-      const result = reader.result;
-      if (typeof result !== 'string') return reject(new Error('Falha ao codificar o arquivo exportado.'));
-      const comma = result.indexOf(',');
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.readAsDataURL(blob);
-  });
-}
-
 function exportFileName(mime: string): string {
   return `PicMax_${Date.now()}.${mime === 'image/png' ? 'png' : 'jpg'}`;
 }
 
 export interface EditorProps {
-  image: LoadedImage;
+  // T10: array de bases (índice = baseVersion do snapshot). bases[0] = imagem aberta; a IA
+  // acrescenta novas via onAddBase e troca a base ativa com dispatch set {baseVersion} (desfazível).
+  bases: LoadedImage[];
+  onAddBase: (img: LoadedImage) => void;
   onBack: () => void;
 }
 
@@ -81,7 +67,7 @@ function StraightenGrid({
   );
 }
 
-export default function Editor({ image, onBack }: EditorProps) {
+export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
@@ -90,6 +76,10 @@ export default function Editor({ image, onBack }: EditorProps) {
     present: initialSnapshot(),
     future: [],
   }));
+  // Base ativa segue o baseVersion do snapshot (undo/redo trocam a base junto). O clamp cobre o
+  // instante entre o dispatch set {baseVersion: N} e o re-render com o `bases` já crescido — os dois
+  // acontecem no mesmo handler (batched), mas o clamp garante que NUNCA se lê bases[undefined].
+  const image = bases[Math.min(history.present.baseVersion, bases.length - 1)];
   const [activeTab, setActiveTab] = useState<TabId>('ajustes');
   const [engineError, setEngineError] = useState<string | null>(null);
   // Modo Cortar (T6): substitui a toolbar de abas por Cancelar/Aplicar e trava undo/redo enquanto ativo.
@@ -169,6 +159,15 @@ export default function Editor({ image, onBack }: EditorProps) {
     const raf = requestAnimationFrame(() => renderer.render(displaySnapshot));
     return () => cancelAnimationFrame(raf);
   }, [displaySnapshot]);
+
+  // Resultado da IA (T10): acrescenta a base nova ao array do App e troca o baseVersion no MESMO
+  // handler (React faz batch dos dois) — o índice da base nova é bases.length ANTES do append.
+  // Desfazível: undo volta o baseVersion e este Editor re-deriva `image` da base antiga (viva).
+  function handleNewBase(img: LoadedImage) {
+    const newIndex = bases.length;
+    onAddBase(img);
+    dispatch({ type: 'set', patch: { baseVersion: newIndex } });
+  }
 
   function handleCropApply(crop: CropRect) {
     const patch: Partial<EditSnapshot> = { geometry: { ...history.present.geometry, crop } };
@@ -357,7 +356,7 @@ export default function Editor({ image, onBack }: EditorProps) {
                 onSizeChange={setAnnotateSize}
               />
             ) : (
-              <EnhancePanel present={history.present} dispatch={dispatch} image={image} />
+              <EnhancePanel present={history.present} dispatch={dispatch} image={image} onNewBase={handleNewBase} />
             )}
           </div>
 

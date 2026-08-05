@@ -77,7 +77,10 @@ export function editReducer(h: EditHistory, a: EditAction): EditHistory {
   switch (a.type) {
     case 'preview': return { ...h, present: { ...h.present, ...a.patch } };
     case 'set': return { past: [...h.past, h.present].slice(-50), present: { ...h.present, ...a.patch }, future: [] };
-    case 'undo': return h.past.length ? { past: h.past.slice(0, -1), present: h.past.at(-1)!, future: [h.present, ...h.future] } : h;
+    // h.past[length-1], NÃO h.past.at(-1): Array.prototype.at é ES2022 e não existe em WebView
+    // antiga (Chrome 83) — o target es2019 do build transpila SINTAXE, não métodos de runtime
+    // (achado real na T10: undo estourava "e.past.at is not a function" e derrubava o editor).
+    case 'undo': return h.past.length ? { past: h.past.slice(0, -1), present: h.past[h.past.length - 1], future: [h.present, ...h.future] } : h;
     case 'redo': return h.future.length ? { past: [...h.past, h.present], present: h.future[0], future: h.future.slice(1) } : h;
     case 'reset': return { past: [...h.past, h.present], present: initialSnapshot(), future: [] };
   }
