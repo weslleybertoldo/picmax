@@ -6,7 +6,7 @@
 
 **Architecture:** Capacitor + Vite + React + TS. Pilha de operações não-destrutiva renderizada em WebGL (preview em resolução de tela, export em resolução total). Plugin Capacitor Kotlin (`ImageEnhancer`) com NCNN/Vulkan para a IA e MediaStore para salvar na galeria.
 
-**Tech Stack:** Capacitor 7, Vite, React 18, TypeScript, WebGL1, Kotlin + JNI/C++ (NCNN, Real-ESRGAN `realesr-general-x4v3`).
+**Tech Stack:** Capacitor 8, Vite, React 19, TypeScript, WebGL1, Kotlin + JNI/C++ (NCNN, Real-ESRGAN `realesr-general-x4v3`). *(Versões reais do scaffold da T1; plano citava Cap 7/React 18.)* `minSdkVersion 29` (MediaStore RELATIVE_PATH na T8).
 
 **Nota de processo (CLAUDE.md global):** projeto pessoal → TDD test-first NÃO obrigatório. Cada task termina com verificação objetiva (`npm run build`, `gradlew assembleDebug` e/ou smoke em device) + commit convencional com trailer `Co-Authored-By: Claude Code <noreply@anthropic.com>` (HEREDOC).
 
