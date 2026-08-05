@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PicMax</string>
+    <string name="title_activity_main">PicMax</string>
+    <string name="package_name">com.bertoldo.picmax</string>
+    <string name="custom_url_scheme">com.bertoldo.picmax</string>
+</resources>
