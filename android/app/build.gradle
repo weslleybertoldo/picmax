@@ -1,6 +1,14 @@
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android' // Task 8: ImageEnhancerPlugin.kt
 
+// Task 12: senha do keystore de release. Prioridade: env var PICMAX_KS_PASS (uso normal, ex.: export
+// antes de ./gradlew assembleRelease) > propriedade `PICMAX_KS_PASS` num gradle.properties LOCAL não
+// versionado (fallback pra quem prefere não exportar env var). SEM o keystore (picmax-release.keystore,
+// gerado via keytool — ver docs/superpowers/plans, Task 12) e sem essa senha, buildTypes.release fica
+// SEM signingConfig — assembleRelease ainda funciona, só produz um APK NÃO assinado (Gradle não falha
+// por isso; falha só ao tentar instalar/publicar sem assinatura).
+def picmaxKsPass = System.getenv('PICMAX_KS_PASS') ?: (project.hasProperty('PICMAX_KS_PASS') ? project.property('PICMAX_KS_PASS') : null)
+
 android {
     namespace = "com.bertoldo.picmax"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -31,10 +39,32 @@ android {
             version '3.22.1'
         }
     }
+    // Task 12: keystore de release. alias fixo "picmax" (ver comando keytool no plano) — arquivo mora
+    // em android/picmax-release.keystore, um nível acima deste build.gradle (android/app/).
+    signingConfigs {
+        release {
+            if (picmaxKsPass) {
+                storeFile file('../picmax-release.keystore')
+                storePassword picmaxKsPass
+                keyAlias 'picmax'
+                keyPassword picmaxKsPass
+            }
+        }
+    }
     buildTypes {
         release {
+            // v1 (Task 12, decisão deliberada): minify/shrink DESLIGADOS. O app usa reflection via
+            // Capacitor (plugins resolvidos por nome de classe) e JNI (nomes de método
+            // Java_com_bertoldo_picmax_ImageEnhancerPlugin_* casados por STRING com o Kotlin) — ligar
+            // R8/minify sem regras de -keep testadas arrisca quebrar exatamente esses 2 caminhos
+            // (plugin não registra / UnsatisfiedLinkError) sem nenhum ganho funcional pra um app
+            // pessoal sem Play Store. Reavaliar só se o tamanho do APK virar problema real.
             minifyEnabled false
+            shrinkResources false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (picmaxKsPass) {
+                signingConfig signingConfigs.release
+            }
         }
     }
     // capacitor.build.gradle fixa sourceCompatibility/targetCompatibility em Java 21 — o bytecode
