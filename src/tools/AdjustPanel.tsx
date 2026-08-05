@@ -50,6 +50,17 @@ export default function AdjustPanel({ present, dispatch }: AdjustPanelProps) {
     dispatch({ type: 'set', patch: { adjustments: { ...present.adjustments, [key]: value } } });
   }
 
+  // Gesto interrompido sem soltura "normal" (pointercancel — gesto de sistema Android, edge-swipe,
+  // scroll do painel roubando o toque — ou blur no meio de um keydown sem keyup): reverte o preview
+  // pro baseline e descarta o gesto SEM registrar `set`. Se não havia gesto em andamento (baseline já
+  // foi consumido por um commit normal), não faz nada.
+  function cancelGesture(key: keyof Adjustments) {
+    if (!(key in baselineRef.current)) return;
+    const baseline = baselineRef.current[key]!;
+    delete baselineRef.current[key];
+    dispatch({ type: 'preview', patch: { adjustments: { ...present.adjustments, [key]: baseline } } });
+  }
+
   function restoreDefaults() {
     dispatch({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS } } });
   }
@@ -81,6 +92,8 @@ export default function AdjustPanel({ present, dispatch }: AdjustPanelProps) {
               // gravaria uma entrada de histórico por tick, exigindo vários undos pra desfazer 1 gesto.
               onPointerUp={(e) => commit(key, Number(e.currentTarget.value))}
               onKeyUp={(e) => commit(key, Number(e.currentTarget.value))}
+              onPointerCancel={() => cancelGesture(key)}
+              onBlur={() => cancelGesture(key)}
             />
           </div>
         );
