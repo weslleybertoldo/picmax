@@ -44,19 +44,47 @@ function classifyCameraError(e: unknown): 'cancelled' | 'permission' | 'other' {
   return 'other';
 }
 
+// Lê só as DIMENSÕES da imagem, sem nunca desenhar num <canvas> (review, fix pré-teste): `img.decode()`
+// decodifica os pixels em memória e resolve quando `naturalWidth/naturalHeight` já estão disponíveis —
+// suportado desde Chrome 63, bem abaixo do baseline de WebView deste app (Chrome 83, ver
+// decodeImage.ts) — sem nunca alocar o backing store width×height×4 bytes de um <canvas> full-res pra
+// uma foto que pode ser recusada de qualquer forma. megapixels = naturalWidth×naturalHeight é
+// INVARIANTE à orientação EXIF (uma rotação de 90/270° só troca w↔h, o produto não muda) — por isso dá
+// pra checar o limite aqui, ANTES de decodeOrientedCanvas (que produz as dimensões "como exibidas").
+async function probeDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    if (typeof img.decode === 'function') {
+      await img.decode();
+    } else {
+      // fallback defensivo (mesmo espírito de decodeImage.ts — WebView hipoteticamente sem decode()).
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Falha ao decodificar a imagem.'));
+      });
+    }
+    return { width: img.naturalWidth, height: img.naturalHeight };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // Blob de imagem → LoadedImage (preview ≤2048 + dimensões full-res). Usado tanto na abertura
 // (galeria/câmera) quanto no resultado da IA (T10: o JPEG 4x vira uma nova BASE com o mesmo shape).
 // `maxMegapixels` (T12): guarda opcional aplicada SÓ pela abertura (ver openImage) — o resultado da
 // IA chama esta função sem o opts e nunca é recusado por tamanho.
 export async function loadedImageFromBlob(blob: Blob, opts: { maxMegapixels?: number } = {}): Promise<LoadedImage> {
+  if (opts.maxMegapixels) {
+    const probe = await probeDimensions(blob);
+    const megapixels = (probe.width * probe.height) / 1_000_000;
+    if (megapixels > opts.maxMegapixels) throw new PhotoTooLargeError(megapixels);
+  }
   // orientação EXIF já aplicada por decodeOrientedCanvas (ver comentário lá — NÃO usar
   // createImageBitmap(blob, {imageOrientation:'from-image'}) direto: quebra em WebView antiga).
   const oriented = await decodeOrientedCanvas(blob);
   const fullW = oriented.width, fullH = oriented.height; // dimensões REAIS (full-res, já orientadas)
-  if (opts.maxMegapixels) {
-    const megapixels = (fullW * fullH) / 1_000_000;
-    if (megapixels > opts.maxMegapixels) throw new PhotoTooLargeError(megapixels);
-  }
   // preview reduzido (≤2048 no lado maior) — full-res só no export/IA, a partir do blob
   const scale = Math.min(1, 2048 / Math.max(fullW, fullH));
   const bitmap = scale < 1

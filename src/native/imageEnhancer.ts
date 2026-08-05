@@ -2,6 +2,7 @@
 // (android/app/src/main/java/com/bertoldo/picmax/ImageEnhancerPlugin.kt).
 // Task 8: saveToGallery (grava o export no MediaStore). Task 10: enhance/cancelEnhance +
 // evento `enhanceProgress` — IA Real-ESRGAN 4x via NCNN (GPU Vulkan quando disponível, senão CPU).
+// Task 12: openAppSettings (botão "Abrir Configurações" da Home quando a permissão é negada).
 import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
 export interface SaveToGalleryOptions {
@@ -36,6 +37,8 @@ export interface ImageEnhancerPlugin {
   /** Rejeita com "cancelado" (cancelEnhance) ou "falha na IA". Só 1 melhoria por vez. */
   enhance(options: EnhanceOptions): Promise<EnhanceResult>;
   cancelEnhance(): Promise<void>;
+  /** Abre a tela "Configurações do app" do sistema (ACTION_APPLICATION_DETAILS_SETTINGS). */
+  openAppSettings(): Promise<void>;
   addListener(
     eventName: 'enhanceProgress',
     listener: (event: EnhanceProgressEvent) => void,

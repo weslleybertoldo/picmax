@@ -76,7 +76,10 @@ export function drawAnnotations(ctx: CanvasRenderingContext2D, annotations: Anno
       }
     } else if (a.kind === 'text') {
       const px = Math.max(1, (a.size / 1000) * w);
-      ctx.font = `bold ${px}px sans-serif`;
+      // `?? 'sans-serif'` (T12, review — gap 7): forward-compat defensivo — ver comentário do campo
+      // `font` em state/editStack.ts. Os 4 nomes vêm de ANNOTATE_FONTS (AnnotationCanvas.tsx) e são
+      // famílias GENÉRICAS CSS (sans-serif/serif/monospace/cursive), não precisam de @font-face.
+      ctx.font = `bold ${px}px ${a.font ?? 'sans-serif'}`;
       ctx.fillStyle = a.color;
       ctx.textBaseline = 'top';
       ctx.fillText(a.text, a.x * w, a.y * h);

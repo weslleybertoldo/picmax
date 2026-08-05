@@ -1,7 +1,8 @@
 // src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (Básico, Ajustes e Filtros
 // funcionais) + overlay de crop / grade de endireitar sobre o canvas
-import { useEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
-import { Capacitor } from '@capacitor/core';
+import { useEffect, useMemo, useReducer, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { createRenderer, type Renderer } from '../engine/renderer';
@@ -142,10 +143,13 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetsVersion, setPresetsVersion] = useState(0);
   // Antes/depois (T12): `showOriginal` true enquanto o dedo segura o canvas por >=HOLD_DELAY_MS fora
-  // do modo Cortar/Anotar (ver handleHoldStart). holdTimerRef guarda o setTimeout pendente pra poder
-  // cancelá-lo se o dedo soltar ANTES dos 200ms (nesse caso showOriginal nunca chega a virar true).
+  // do modo Cortar/Anotar (ver handleHoldStart). holdTimerRef guarda o setTimeout PENDENTE (zerado no
+  // próprio disparo — ver handleHoldStart — e no cancelamento) pra nunca sobrar um id "morto" lido como
+  // "ainda em andamento". holdPointerIdRef guarda o pointerId que INICIOU o hold (review, fix multi-touch):
+  // handleHoldEnd só reage ao MESMO ponteiro — um 2º dedo pousando/saindo na tela não cancela o hold do 1º.
   const [showOriginal, setShowOriginal] = useState(false);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdPointerIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -234,15 +238,27 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
   }, []);
 
   // Antes/depois: pointerdown fora do modo Cortar/Anotar (ferramenta ativa) inicia o timer; só troca
-  // pra "Original" se o dedo ainda estiver na tela HOLD_DELAY_MS depois (um toque rápido não deve
-  // disparar o hint por 1 frame). onPointerUp/Cancel/Leave sempre cancelam (idempotente: clearTimeout
-  // de um timer já disparado é no-op, e setShowOriginal(false) quando já é false não rerenderiza).
-  function handleHoldStart() {
+  // pra "Original" se o MESMO dedo ainda estiver na tela HOLD_DELAY_MS depois (um toque rápido não deve
+  // disparar o hint por 1 frame). setPointerCapture (review, fix): garante que pointerup/cancel deste
+  // MESMO ponteiro sempre chegam neste elemento, mesmo que o dedo arraste pra fora do canvas antes de
+  // soltar — sem isso, um drag rápido pra fora perderia o onPointerUp e o hold ficaria "preso" em
+  // showOriginal=true até o onPointerLeave (que só dispara na saída, não cobre soltar já fora).
+  // holdPointerIdRef trava o gesto no PRIMEIRO dedo: handleHoldEnd ignora eventos de um pointerId
+  // diferente (2º dedo pousando ou saindo não interfere no hold do 1º — mesma disciplina de
+  // CropOverlay/AnnotationCanvas, que já filtram por pointerId nos próprios gestos).
+  function handleHoldStart(e: ReactPointerEvent<HTMLDivElement>) {
     if (cropMode || (activeTab === 'anotar' && annotateTool !== null)) return;
-    if (holdTimerRef.current) return; // já em andamento (ex.: 2º dedo) — ignora
-    holdTimerRef.current = setTimeout(() => setShowOriginal(true), HOLD_DELAY_MS);
+    if (holdPointerIdRef.current !== null) return; // hold já em andamento (outro dedo) — ignora
+    holdPointerIdRef.current = e.pointerId;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    holdTimerRef.current = setTimeout(() => {
+      holdTimerRef.current = null; // dispara: não sobra timer "pendente" — só o hold ativo, até o pointerup
+      setShowOriginal(true);
+    }, HOLD_DELAY_MS);
   }
-  function handleHoldEnd() {
+  function handleHoldEnd(e: ReactPointerEvent<HTMLDivElement>) {
+    if (holdPointerIdRef.current !== e.pointerId) return; // não é o dedo que iniciou o hold — ignora
+    holdPointerIdRef.current = null;
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
@@ -367,6 +383,44 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
     }
     onBack();
   }
+
+  // Botão FÍSICO de voltar do Android (review, bloqueante 3): sem um listener próprio, o comportamento
+  // default do plugin App tentaria voltar no histórico do WebView — que esta SPA nunca usa (troca
+  // condicional de tela, sem router) — e cairia direto no exit do app, mesmo dentro do Editor. Prioridade:
+  // 1) modal de salvar modelo aberto → só fecha o modal; 2) modo Cortar aberto → só cancela o crop;
+  // 3) senão, mesma lógica do botão de voltar na tela (confirm se houver edição não-neutra).
+  // Ref (não os states direto): o listener é registrado 1x (Capacitor.App.addListener é assíncrono e
+  // não republicaria a cada mudança de estado sem reassinar) — backButtonHandlerRef.current é
+  // reatribuído TODA render, então o callback do listener sempre lê a versão mais atual dos states
+  // fechados nele (mesma técnica do `liveRef` já usado em AdjustPanel/FilterPanel pra evitar closure
+  // obsoleta). Modais de ferramentas filhas (progresso da IA, texto de anotação, menu de modelo) NÃO
+  // são cobertos aqui — ficam fora do escopo desta review (não expõem um "fechar" pro Editor); back
+  // nesses casos cai na lógica de cima (crop/save-modal → confirm-ou-volta), que já é uma melhoria
+  // real sobre o comportamento anterior (sem listener nenhum, o back saía do app direto).
+  const backButtonHandlerRef = useRef<() => void>(() => {});
+  backButtonHandlerRef.current = () => {
+    if (showSaveModal) {
+      setShowSaveModal(false);
+      return;
+    }
+    if (cropMode) {
+      setCropMode(false);
+      return;
+    }
+    handleBackClick();
+  };
+  useEffect(() => {
+    let handle: PluginListenerHandle | null = null;
+    let cancelled = false;
+    CapacitorApp.addListener('backButton', () => backButtonHandlerRef.current()).then((h) => {
+      if (cancelled) h.remove();
+      else handle = h;
+    });
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, []);
 
   return (
     <div className="editor">
@@ -500,8 +554,12 @@ export default function Editor({ bases, onAddBase, onBack }: EditorProps) {
             anotações deslocadas/fora de escala (glitch visual real, achado no quality review) até o
             usuário sair do modo Cortar. Cortar/Aplicar já limpam `annotations` com confirm quando há
             alguma (ver handleCropApply) — então escondê-las ENQUANTO o modo está aberto não perde nada,
-            só evita mostrar uma posição temporariamente errada. */}
-        {!cropMode && (
+            só evita mostrar uma posição temporariamente errada. Mesmo raciocínio pro antes/depois
+            (review, bloqueante 1): enquanto `showOriginal`, o frame renderizado é o NEUTRO da base —
+            também DIFERENTE do frame em que as anotações foram desenhadas (elas fazem parte da edição,
+            não do "original"). Sem esconder aqui, as anotações apareceriam fora de posição por cima da
+            foto original enquanto o dedo segura. */}
+        {!cropMode && !showOriginal && (
           <AnnotationCanvas
             canvasRef={canvasRef}
             containerRef={canvasWrapRef}

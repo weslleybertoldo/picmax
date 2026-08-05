@@ -158,6 +158,15 @@ button {
   font-size: 14px;
   max-width: 340px;
 }
+.home-error p {
+  margin: 0 0 8px;
+}
+.home-error p:last-child {
+  margin-bottom: 0;
+}
+.home-error-settings {
+  width: 100%;
+}
 
 /* ---------- Home > "Meus modelos" (T11) ---------- */
 .home-presets {
@@ -256,6 +265,15 @@ button {
   overflow: hidden;
   padding: 10px;
   position: relative;
+  /* Antes/depois (T12, review — bloqueante 2): sem isso, o WebView trata o pointerdown >=200ms como
+     um long-press "nativo" (menu de contexto / seleção de texto / callout do iOS-Safari-ish no
+     Android) em device real e cancela nosso próprio gesto no meio do caminho — nunca reproduzido no
+     emulador (sem esses gestos do sistema), só em hardware real. touch-action:none também impede o
+     scroll/zoom do sistema competir com o hold. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .editor-canvas {
   max-width: 100%;
@@ -768,6 +786,26 @@ input[type='range']::-moz-range-thumb {
 .text-modal-actions .btn {
   flex: 1;
   height: 44px;
+}
+/* Seletor de fonte da anotação de texto (T12, review — gap 7): 4 botões "Aa" com font-family
+   distinta cada — cada botão já PARECE a fonte que escolhe, sem precisar de rótulo lido em voz alta. */
+.text-modal-fonts {
+  display: flex;
+  gap: 8px;
+}
+.text-modal-font {
+  flex: 1;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated-2);
+  color: var(--text);
+  font-size: 16px;
+  cursor: pointer;
+}
+.text-modal-font.active {
+  border-color: var(--brand-2);
+  box-shadow: 0 0 0 2px var(--brand-2);
 }
 
 /* ---------- AnnotatePanel ---------- */

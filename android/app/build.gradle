@@ -2,12 +2,31 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android' // Task 8: ImageEnhancerPlugin.kt
 
 // Task 12: senha do keystore de release. Prioridade: env var PICMAX_KS_PASS (uso normal, ex.: export
-// antes de ./gradlew assembleRelease) > propriedade `PICMAX_KS_PASS` num gradle.properties LOCAL não
-// versionado (fallback pra quem prefere não exportar env var). SEM o keystore (picmax-release.keystore,
-// gerado via keytool — ver docs/superpowers/plans, Task 12) e sem essa senha, buildTypes.release fica
-// SEM signingConfig — assembleRelease ainda funciona, só produz um APK NÃO assinado (Gradle não falha
-// por isso; falha só ao tentar instalar/publicar sem assinatura).
+// antes de ./gradlew assembleRelease) > propriedade `PICMAX_KS_PASS` no `~/.gradle/gradle.properties`
+// DO USUÁRIO (fallback pra quem prefere não exportar env var). ⚠️ NÃO no `android/gradle.properties`
+// deste repo — esse arquivo é VERSIONADO (committed), colar a senha nele a vazaria no git (review,
+// fix footgun). SEM o keystore (picmax-release.keystore, gerado via keytool — ver docs/superpowers/
+// plans, Task 12) e sem essa senha, buildTypes.release fica SEM signingConfig — assembleRelease ainda
+// funciona, só produz um APK NÃO assinado (Gradle não falha por isso; falha só ao tentar
+// instalar/publicar sem assinatura).
 def picmaxKsPass = System.getenv('PICMAX_KS_PASS') ?: (project.hasProperty('PICMAX_KS_PASS') ? project.property('PICMAX_KS_PASS') : null)
+
+// Task 12 (review, fix sync de versão): versionName/versionCode derivados do package.json — FONTE
+// ÚNICA da versão do app (o mesmo package.json que o vite.config.ts lê pra __APP_VERSION__, ver
+// comentário lá). Sem isso, bumpar a versão pra testar o update in-app exigia editar 2 lugares (aqui
+// e o package.json) e um deles ficava esquecido — exatamente o cenário que quebra o teste de update
+// (rodapé compara __APP_VERSION__ vs a tag do GitHub; o APK instalado usa este versionCode/versionName).
+// versionCode = major*10000 + minor*100 + patch (schema simples, comporta até 99 minor/patch por major
+// — suficiente pro semver deste app; parts ausentes/não-numéricas caem em 0).
+def pkgJson = new groovy.json.JsonSlurper().parse(file('../../package.json'))
+def pkgVersion = pkgJson.version as String
+def pkgVerParts = pkgVersion.tokenize('.')
+// parte ausente ou não-numérica (ex.: sufixo "-beta") degrada pra 0 — mesmo espírito defensivo do
+// parseSemver em src/update/apkUpdater.ts (`Number(n) || 0`), não trava o build por uma versão exótica.
+def pkgVerPart = { int i -> (i < pkgVerParts.size() && pkgVerParts[i].isInteger()) ? pkgVerParts[i].toInteger() : 0 }
+def pkgVerMajor = pkgVerPart(0)
+def pkgVerMinor = pkgVerPart(1)
+def pkgVerPatch = pkgVerPart(2)
 
 android {
     namespace = "com.bertoldo.picmax"
@@ -18,8 +37,8 @@ android {
         applicationId "com.bertoldo.picmax"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode pkgVerMajor * 10000 + pkgVerMinor * 100 + pkgVerPatch
+        versionName pkgVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Task 10: arm64-v8a = devices reais; x86_64 = emulador (smoke test — AVD revapk30).
         // Sem armeabi-v7a/x86: só vendoramos o prebuilt do NCNN pros 2 ABIs acima.

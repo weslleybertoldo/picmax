@@ -25,6 +25,19 @@ export type AnnotateTool = 'pen' | 'eraser' | 'text' | 'arrow' | 'rect' | 'ellip
 export const DEFAULT_ANNOTATE_COLOR = '#ffffff';
 export const DEFAULT_ANNOTATE_SIZE = 12;
 
+// Fontes do texto (T12, review — gap 7): 4 famílias CSS GENÉRICAS (garantidas pela spec CSS a mapear
+// pra fontes distintas no sistema — sem @font-face, sem inflar o APK com arquivos de fonte). Escolhida
+// NO MODAL de texto (ver textFont abaixo), não no AnnotatePanel: é uma propriedade da anotação sendo
+// criada AGORA, igual à posição — diferente de color/size, que são config "do próximo traço" reusada
+// entre vários gestos de pen/shape.
+export const DEFAULT_ANNOTATE_FONT = 'sans-serif';
+export const ANNOTATE_FONTS: Array<{ id: string; label: string }> = [
+  { id: 'sans-serif', label: 'Padrão' },
+  { id: 'serif', label: 'Serifada' },
+  { id: 'monospace', label: 'Mono' },
+  { id: 'cursive', label: 'Manuscrita' },
+];
+
 const SHAPE_TOOL: Partial<Record<AnnotateTool, 'arrow' | 'rect' | 'ellipse' | 'line'>> = {
   arrow: 'arrow',
   rect: 'rect',
@@ -77,6 +90,10 @@ export default function AnnotationCanvas({
   // Toque com a ferramenta Texto: âncora (fração) esperando o mini-modal confirmar/cancelar.
   const [textAnchor, setTextAnchor] = useState<Point | null>(null);
   const [textValue, setTextValue] = useState('');
+  // Fonte escolhida NO modal (T12, review — gap 7) — reseta pro default a cada abertura (ver
+  // onPointerDown abaixo), não persiste entre textos (diferente de color/size, que são "config
+  // corrente" do AnnotatePanel).
+  const [textFont, setTextFont] = useState(DEFAULT_ANNOTATE_FONT);
 
   // Redesenha a camada inteira sempre que as anotações confirmadas OU o rascunho ao vivo mudam (ou o
   // box muda de tamanho, ex.: girar 90° troca o aspecto do frame). Sem estado incremental — a lista é
@@ -109,6 +126,7 @@ export default function AnnotationCanvas({
     if (tool === 'text') {
       setTextAnchor(p);
       setTextValue('');
+      setTextFont(DEFAULT_ANNOTATE_FONT);
       return; // sem drag pra ferramenta Texto — o mini-modal decide commit/cancelamento
     }
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -173,7 +191,7 @@ export default function AnnotationCanvas({
   function confirmText() {
     const text = textValue.trim();
     if (text && textAnchor) {
-      const annotation: Annotation = { kind: 'text', x: textAnchor.x, y: textAnchor.y, text, color, size };
+      const annotation: Annotation = { kind: 'text', x: textAnchor.x, y: textAnchor.y, text, color, size, font: textFont };
       dispatch({ type: 'set', patch: { annotations: [...present.annotations, annotation] } });
     }
     setTextAnchor(null);
@@ -213,6 +231,21 @@ export default function AnnotationCanvas({
               onChange={(e) => setTextValue(e.target.value)}
               placeholder="Digite o texto"
             />
+            <div className="text-modal-fonts" data-testid="text-modal-fonts">
+              {ANNOTATE_FONTS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={`text-modal-font${textFont === f.id ? ' active' : ''}`}
+                  data-testid={`text-modal-font-${f.id}`}
+                  style={{ fontFamily: f.id }}
+                  aria-label={f.label}
+                  onClick={() => setTextFont(f.id)}
+                >
+                  Aa
+                </button>
+              ))}
+            </div>
             <div className="text-modal-actions">
               <button
                 type="button"

@@ -51,9 +51,14 @@ export interface Geometry {
 }
 export const DEFAULT_GEOMETRY: Geometry = { rotate90: 0, flipH: false, flipV: false, straighten: 0, crop: null, resizeMaxSide: null };
 
+// `font` (T12, review — gap 7): família CSS ('sans-serif' | 'serif' | 'monospace' | 'cursive' — ver
+// ANNOTATE_FONTS em annotate/AnnotationCanvas.tsx). Sempre preenchido em anotações NOVAS (o modal de
+// texto sempre passa um valor); leituras (drawAnnotations) usam `?? 'sans-serif'` mesmo assim —
+// forward-compat defensivo caso algum objeto tenha sido construído sem o campo (ex.: hook de dev que
+// injeta `annotations` fake, ver Editor.tsx).
 export type Annotation =
   | { kind: 'stroke'; points: { x: number; y: number }[]; color: string; size: number; erase: boolean }
-  | { kind: 'text'; x: number; y: number; text: string; color: string; size: number }
+  | { kind: 'text'; x: number; y: number; text: string; color: string; size: number; font: string }
   | { kind: 'shape'; shape: 'arrow' | 'rect' | 'ellipse' | 'line'; from: { x: number; y: number }; to: { x: number; y: number }; color: string; size: number };
 // coordenadas de anotação são frações 0..1 do frame final (pós-geometria)
 

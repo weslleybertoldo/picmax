@@ -1,8 +1,19 @@
 // src/screens/Home.tsx — tela inicial: abrir da galeria, tirar foto (e, em dev, imagem de teste)
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
+import type { PluginListenerHandle } from '@capacitor/core';
 import { CameraPermissionDeniedError, openImage, PhotoTooLargeError, type LoadedImage } from '../io/openImage';
+import { ImageEnhancer } from '../native/imageEnhancer';
 import PresetsPanel from '../presets/PresetsPanel';
 import { checkLatest, downloadAndInstall, NoApkAssetError, type UpdateInfo } from '../update/apkUpdater';
+
+// Erro de abertura (T12, review — gap 8): permissão negada ganha um botão "Abrir Configurações"
+// (openAppSettings do plugin nativo — ImageEnhancerPlugin.kt) além do texto; os outros 2 casos
+// (foto grande, erro genérico) são só texto, sem ação possível daqui.
+interface HomeError {
+  text: string;
+  showSettingsButton: boolean;
+}
 
 // Resultado da verificação manual do rodapé — estado próprio p/ "release sem apk" (review T13, fix 3):
 // sem isso, cairia no mesmo balde genérico de "erro de rede" e a mensagem ficaria enganosa.
@@ -58,11 +69,34 @@ async function makeTestImage(): Promise<LoadedImage> {
 
 export default function Home({ onImage }: HomeProps) {
   const [busy, setBusy] = useState<Busy>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HomeError | null>(null);
   // Acesso à lista de modelos (T11) sem precisar de uma foto aberta — troca a Home pra uma tela
   // simples de lista; tocar num modelo aqui não aplica nada (não há edição em curso), só mostra um
   // hint (ver PresetsPanel: `onApply` ausente = modo "view").
   const [showPresets, setShowPresets] = useState(false);
+
+  // Botão físico de voltar (T12, review): sem listener próprio o plugin App tentaria voltar no
+  // histórico do WebView (que esta SPA não usa) e cairia direto no exit — então a Home precisa do
+  // SEU PRÓPRIO listener (o Editor tem o dele, ver Editor.tsx) pra: dentro de "Meus modelos" → só
+  // fecha a lista (mesmo efeito do botão ← em tela); na Home "de baixo" → aí sim sai do app. Ref
+  // porque o listener é registrado 1x mas precisa sempre ler o showPresets mais atual.
+  const showPresetsRef = useRef(showPresets);
+  showPresetsRef.current = showPresets;
+  useEffect(() => {
+    let handle: PluginListenerHandle | null = null;
+    let cancelled = false;
+    CapacitorApp.addListener('backButton', () => {
+      if (showPresetsRef.current) setShowPresets(false);
+      else CapacitorApp.exitApp(); // não implementado na web (chamado só quando o evento nativo dispara)
+    }).then((h) => {
+      if (cancelled) h.remove();
+      else handle = h;
+    });
+    return () => {
+      cancelled = true;
+      handle?.remove();
+    };
+  }, []);
 
   // Rodapé (T13): verificação manual de atualização — separado do check automático de boot
   // (UpdateChecker.tsx, montado no App): aqui o usuário pede explicitamente, então mesmo "sem
@@ -106,23 +140,31 @@ export default function Home({ onImage }: HomeProps) {
       const image = await openImage(source);
       if (image) onImage(image);
     } catch (e) {
-      // 3 casos distintos (T12): permissão negada precisa de instrução (o app não tem como abrir as
-      // Configurações do sistema sozinho — nenhum plugin pra isso, decisão do plano); foto grande
-      // demais precisa dizer QUAL é o limite; qualquer outra falha (rede, hardware, decode) cai no
-      // genérico de sempre. Nenhum deles mostra stack trace.
+      // 3 casos distintos (T12): permissão negada ganha instrução + botão "Abrir Configurações"
+      // (review, gap 8 — ImageEnhancer.openAppSettings, já que o app não pode reabrir o dialog de
+      // permissão sozinho depois de "negar permanentemente"); foto grande demais precisa dizer QUAL é
+      // o limite; qualquer outra falha (rede, hardware, decode) cai no genérico de sempre. Nenhum
+      // deles mostra stack trace.
       if (e instanceof CameraPermissionDeniedError) {
-        setError(
-          `Permissão negada para ${source === 'camera' ? 'câmera' : 'galeria'}. Habilite o acesso em ` +
-            'Configurações do sistema → Apps → PicMax → Permissões e tente novamente.',
-        );
+        setError({
+          text: `Permissão negada para ${source === 'camera' ? 'câmera' : 'galeria'}. Habilite o acesso nas Configurações do app e tente novamente.`,
+          showSettingsButton: true,
+        });
       } else if (e instanceof PhotoTooLargeError) {
-        setError(e.message);
+        setError({ text: e.message, showSettingsButton: false });
       } else {
-        setError('Não foi possível abrir a imagem. Tente novamente.');
+        setError({ text: 'Não foi possível abrir a imagem. Tente novamente.', showSettingsButton: false });
       }
     } finally {
       setBusy(null);
     }
+  }
+
+  // Plugin indisponível (ex.: web/dev) ou Intent falhando num device exótico — nada a fazer além de
+  // deixar o texto (que já orienta o caminho manual) como está; nunca deixa um erro sem tratamento
+  // borbulhar de um clique de botão.
+  function handleOpenSettings() {
+    ImageEnhancer.openAppSettings().catch(() => {});
   }
 
   async function handleTestImage() {
@@ -132,7 +174,7 @@ export default function Home({ onImage }: HomeProps) {
       const image = await makeTestImage();
       onImage(image);
     } catch {
-      setError('Não foi possível gerar a imagem de teste.');
+      setError({ text: 'Não foi possível gerar a imagem de teste.', showSettingsButton: false });
     } finally {
       setBusy(null);
     }
@@ -170,7 +212,21 @@ export default function Home({ onImage }: HomeProps) {
         <p className="home-subtitle">Edição de imagens, 100% offline</p>
       </div>
 
-      {error && <p className="home-error">{error}</p>}
+      {error && (
+        <div className="home-error">
+          <p>{error.text}</p>
+          {error.showSettingsButton && (
+            <button
+              type="button"
+              className="btn btn-secondary home-error-settings"
+              data-testid="open-app-settings"
+              onClick={handleOpenSettings}
+            >
+              Abrir Configurações
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="home-actions">
         <button

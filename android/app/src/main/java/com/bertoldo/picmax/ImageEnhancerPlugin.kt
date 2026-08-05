@@ -1,7 +1,10 @@
 package com.bertoldo.picmax
 
 import android.content.ContentValues
+import android.content.Intent
+import android.net.Uri
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import com.getcapacitor.JSObject
@@ -133,6 +136,24 @@ class ImageEnhancerPlugin : Plugin() {
     fun cancelEnhance(call: PluginCall) {
         if (nativeLibState == true) nativeCancel()
         call.resolve()
+    }
+
+    // Abre a tela de detalhes do app nas Configurações do sistema (T12, review — gap 8): usada pelo
+    // botão "Abrir Configurações" da Home quando a permissão de câmera/galeria é negada
+    // (CameraPermissionDeniedError em src/io/openImage.ts) — o app não tem como pedir a permissão de
+    // novo depois de "negar permanentemente" (Android some com o dialog nesse caso), só o usuário
+    // habilitando manualmente ali resolve. Mesma tela que "Configurações do app > Permissões".
+    @PluginMethod
+    fun openAppSettings(call: PluginCall) {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            intent.data = Uri.fromParts("package", context.packageName, null)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject(e.message ?: "erro ao abrir configurações")
+        }
     }
 
     @PluginMethod
