@@ -20,22 +20,49 @@ export function useCanvasBox(
 ): CanvasBox | null {
   const [box, setBox] = useState<CanvasBox | null>(null);
   useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+    let ro: ResizeObserver | undefined;
+    let raf = 0;
+    let cancelled = false;
+
     function update() {
+      const canvas = canvasRef.current;
+      const container = containerRef.current;
       if (!canvas || !container) return;
       const c = canvas.getBoundingClientRect();
       const p = container.getBoundingClientRect();
       setBox({ left: c.left - p.left, top: c.top - p.top, width: c.width, height: c.height });
     }
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(canvas);
-    ro.observe(container);
-    window.addEventListener('resize', update);
+
+    // Tenta configurar; se `canvasRef`/`containerRef` ainda não foram atribuídos, tenta de novo no
+    // próximo frame (achado real na T7/AnnotationCanvas: React atribui refs bottom-up durante o
+    // commit — quando um consumidor deste hook é montado no MESMO commit do elemento apontado por
+    // `containerRef` (ex.: AnnotationCanvas, filho direto de `.editor-canvas-wrap`, que é o próprio
+    // container), o layout effect do FILHO roda ANTES do ref do PAI ser atribuído, então
+    // `containerRef.current` ainda é null nesse instante. CropOverlay/StraightenGrid nunca bateram
+    // nisso por montarem DEPOIS do commit inicial — quando já leem um container-ref havia sido
+    // atribuído. Sem esse retry, o efeito nunca mais roda (deps são refs estáveis) e `box` fica null
+    // pra sempre. Retry limitado a 1 frame por chamada — assim que os dois refs existem (o commit
+    // inteiro já terminou), configura os observers normalmente e não tenta de novo.
+    function trySetup() {
+      if (cancelled) return;
+      const canvas = canvasRef.current;
+      const container = containerRef.current;
+      if (!canvas || !container) {
+        raf = requestAnimationFrame(trySetup);
+        return;
+      }
+      update();
+      ro = new ResizeObserver(update);
+      ro.observe(canvas);
+      ro.observe(container);
+      window.addEventListener('resize', update);
+    }
+    trySetup();
+
     return () => {
-      ro.disconnect();
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
       window.removeEventListener('resize', update);
     };
   }, [canvasRef, containerRef]);

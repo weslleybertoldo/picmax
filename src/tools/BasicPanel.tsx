@@ -19,12 +19,16 @@ const RESIZE_CHIPS: Array<{ label: string; value: number | null; testId: string 
   { label: '1080px', value: 1080, testId: '1080' },
 ];
 
-// Guarda de anotações (spec T6): Cortar/Girar 90° mudam o FRAME (aspecto/orientação), e as
-// coordenadas de anotação são frações do frame FINAL pós-geometria — sem realinhamento elas ficariam
-// deslocadas/erradas. Espelhar e Endireitar NÃO mudam o formato/aspecto do frame (só reamostram
-// dentro dele), então não disparam a guarda — decisão v1 documentada aqui e no plano da T6.
-// Anotações só existem a partir da T7; o guard já fica pronto e é validado com annotations injetadas
-// via hook de dev (ver Editor.tsx, import.meta.env.DEV).
+// Guarda de anotações: qualquer mudança de GEOMETRIA com anotações ativas limpa `annotations` (após
+// confirmação) — decisão v1 UNIFORME (T7 revisita a decisão inicial da T6, que só cobria Cortar/Girar
+// 90°). Cortar/Girar 90° mudam o FRAME (aspecto/orientação) e as coordenadas de anotação são frações
+// do frame FINAL pós-geometria — sem realinhamento elas ficariam deslocadas/erradas (motivo original
+// da T6). Espelhar H/V e o COMMIT do Endireitar não mudam o aspecto do frame, mas REAMOSTRAM o
+// conteúdo dentro dele (frame fixo, conteúdo espelha/inclina) — uma anotação desenhada sobre um
+// detalhe da foto passaria a apontar pra um pedaço DIFERENTE da imagem depois do espelho/endireitar,
+// mesmo com a mesma fração x,y. Por simplicidade (v1), a regra é igual pras 4 ações em vez de
+// recalcular a posição da anotação sob cada transformação — usuário reanota depois de ajustar a
+// geometria.
 function confirmDiscardAnnotations(): boolean {
   return window.confirm('As anotações serão removidas. Continuar?');
 }
@@ -62,6 +66,10 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
   }
 
   function toggleFlip(axis: 'flipH' | 'flipV') {
+    // Guarda de anotações (T7): espelhar reamostra o CONTEÚDO sob o frame fixo — ver
+    // confirmDiscardAnnotations acima. Cancelar aborta sem tocar em `geometry`.
+    const hasAnnotations = present.annotations.length > 0;
+    if (hasAnnotations && !confirmDiscardAnnotations()) return;
     const g = liveRef.current;
     // Achado durante a validação do fix de rotate90+flip: espelhar SOZINHO, com um crop ativo, já
     // corrompia a seleção (o flip espelha em torno do centro do FRAME cheio, não do centro do próprio
@@ -78,7 +86,7 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
       crop: g.crop ? mirrorCropRect(g.crop, axis === 'flipH' ? 'x' : 'y') : null,
       straighten: -g.straighten,
     };
-    commitGeometry(next, false);
+    commitGeometry(next, hasAnnotations);
   }
 
   function setResize(value: number | null) {
@@ -94,9 +102,16 @@ export default function BasicPanel({ present, dispatch, onEnterCrop, onStraighte
       dispatch({ type: 'preview', patch: { geometry: next } });
     },
     onSet: (v) => {
+      // Guarda de anotações (T7): o COMMIT do Endireitar reamostra o conteúdo sob o frame fixo — ver
+      // confirmDiscardAnnotations acima. Cancelar aqui NÃO precisa reverter manualmente: `commit()` do
+      // useSliderGesture (ver useSliderGesture.ts) já chamou onPreview(baseline.value) IMEDIATAMENTE
+      // antes deste onSet, então abortar sem dispatch deixa `geometry.straighten` exatamente no
+      // baseline (o valor antes do arraste).
+      const hasAnnotations = present.annotations.length > 0;
+      if (hasAnnotations && !confirmDiscardAnnotations()) return;
       const next = { ...liveRef.current, straighten: v };
       liveRef.current = next;
-      dispatch({ type: 'set', patch: { geometry: next } });
+      dispatch({ type: 'set', patch: hasAnnotations ? { geometry: next, annotations: [] } : { geometry: next } });
     },
   });
 

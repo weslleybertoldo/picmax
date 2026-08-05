@@ -9,6 +9,8 @@ import CropOverlay from '../tools/CropOverlay';
 import { useCanvasBox } from '../tools/canvasGeometry';
 import AdjustPanel from '../tools/AdjustPanel';
 import FilterPanel from '../tools/FilterPanel';
+import AnnotatePanel from '../tools/AnnotatePanel';
+import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type AnnotateTool } from '../annotate/AnnotationCanvas';
 
 export interface EditorProps {
   image: LoadedImage;
@@ -66,6 +68,14 @@ export default function Editor({ image, onBack }: EditorProps) {
   const [cropMode, setCropMode] = useState(false);
   // Grade 3x3 visível só durante o arraste do slider Endireitar (ver StraightenGrid acima).
   const [showStraightenGrid, setShowStraightenGrid] = useState(false);
+  // Estado da ferramenta de anotação (T7): levantado pro Editor porque AnnotatePanel (controla) e
+  // AnnotationCanvas (lê, pra saber o que desenhar no próximo gesto) são componentes-irmãos — mesmo
+  // padrão de cropMode/showStraightenGrid acima. `null` = nenhuma ferramenta ativa (overlay não
+  // captura pointer). color/size são estado LOCAL da ferramenta (NÃO vão pro EditSnapshot/histórico —
+  // ver comentário no slider de espessura em AnnotatePanel.tsx).
+  const [annotateTool, setAnnotateTool] = useState<AnnotateTool | null>(null);
+  const [annotateColor, setAnnotateColor] = useState(DEFAULT_ANNOTATE_COLOR);
+  const [annotateSize, setAnnotateSize] = useState(DEFAULT_ANNOTATE_SIZE);
 
   // Hook de dev (T6, só em build DEV — tree-shaken em produção via import.meta.env.DEV): permite
   // injetar `annotations` fake por fora da UI (T7 ainda não existe) pra validar a guarda de
@@ -168,6 +178,19 @@ export default function Editor({ image, onBack }: EditorProps) {
         )}
         <canvas ref={canvasRef} className="editor-canvas" data-testid="canvas" />
         {showStraightenGrid && <StraightenGrid canvasRef={canvasRef} containerRef={canvasWrapRef} />}
+        {/* Camada de anotações: visível em TODAS as abas (anotações fazem parte da edição), mas só
+            captura pointer na aba Anotar com uma ferramenta ativa e fora do modo Cortar (que já tem
+            seu próprio overlay/gestos — ver CropOverlay abaixo). */}
+        <AnnotationCanvas
+          canvasRef={canvasRef}
+          containerRef={canvasWrapRef}
+          present={history.present}
+          dispatch={dispatch}
+          enabled={!cropMode && activeTab === 'anotar' && annotateTool !== null}
+          tool={annotateTool}
+          color={annotateColor}
+          size={annotateSize}
+        />
       </div>
 
       {cropMode ? (
@@ -192,6 +215,17 @@ export default function Editor({ image, onBack }: EditorProps) {
               <AdjustPanel present={history.present} dispatch={dispatch} />
             ) : activeTab === 'filtros' ? (
               <FilterPanel present={history.present} dispatch={dispatch} image={image} />
+            ) : activeTab === 'anotar' ? (
+              <AnnotatePanel
+                present={history.present}
+                dispatch={dispatch}
+                tool={annotateTool}
+                onToolChange={setAnnotateTool}
+                color={annotateColor}
+                onColorChange={setAnnotateColor}
+                size={annotateSize}
+                onSizeChange={setAnnotateSize}
+              />
             ) : (
               <p className="panel-placeholder">Em breve</p>
             )}
