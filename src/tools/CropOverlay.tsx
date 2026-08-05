@@ -82,12 +82,23 @@ function clamp(v: number, min: number, max: number) {
   return Math.min(max, Math.max(min, v));
 }
 
-// Maior retângulo respeitando `ratio` (w/h), centrado no retângulo atual, sem sair de [0,1].
-function applyRatio(r: CropRect, ratio: number): CropRect {
-  let w = r.w, h = w / ratio;
-  if (h > r.h) { h = r.h; w = h * ratio; }
-  if (w > 1) { w = 1; h = w / ratio; }
-  if (h > 1) { h = 1; w = h * ratio; }
+// Converte uma razão de PIXEL (ex.: 1 pra "1:1", 16/9 pra "16:9") pra razão equivalente no espaço de
+// FRAÇÃO 0..1 usado pelo CropRect. Bug corrigido (spec review): fração e pixel só têm a MESMA razão
+// quando o frame é quadrado — ww/hh (fração) precisa ser dividido pelo aspecto do frame pra que
+// ww*fw == hh*fh (pixels reais) quando fw≠fh. Como o box CSS do canvas é sempre proporcional ao frame
+// (ver comentário no topo do arquivo), `box.width/box.height` já É o aspecto do frame (fw/fh) — não é
+// preciso consultar frameSize().
+function pixelRatioToFracRatio(pixelRatio: number, box: Box): number {
+  return pixelRatio / (box.width / box.height);
+}
+
+// Maior retângulo respeitando `fracRatio` (w/h EM FRAÇÃO, já convertido — ver pixelRatioToFracRatio),
+// centrado no retângulo atual, sem sair de [0,1].
+function applyRatio(r: CropRect, fracRatio: number): CropRect {
+  let w = r.w, h = w / fracRatio;
+  if (h > r.h) { h = r.h; w = h * fracRatio; }
+  if (w > 1) { w = 1; h = w / fracRatio; }
+  if (h > 1) { h = 1; w = h * fracRatio; }
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   return { x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h), w, h };
 }
@@ -104,7 +115,9 @@ export default function CropOverlay({ canvasRef, containerRef, initialCrop, onCa
 
   function selectPreset(p: Preset) {
     setRatio(p.ratio);
-    setRect((r) => (p.ratio ? applyRatio(r, p.ratio) : r));
+    // `ratio` guarda a razão de PIXEL (identidade do preset, comparada abaixo pra marcar o botão
+    // ativo); a conversão pra fração só entra no momento de aplicar (aqui) ou de redimensionar (onMove).
+    setRect((r) => (p.ratio && box ? applyRatio(r, pixelRatioToFracRatio(p.ratio, box)) : r));
   }
 
   // Converte um ponto em coordenadas de VIEWPORT (e.clientX/Y) pra fração 0..1 do canvas. Usa
@@ -158,12 +171,16 @@ export default function CropOverlay({ canvasRef, containerRef, initialCrop, onCa
     let w = clamp(signX * (fx - fixedX), MIN_SIZE, Math.max(MIN_SIZE, maxW));
     let h = clamp(signY * (fy - fixedY), MIN_SIZE, Math.max(MIN_SIZE, maxH));
     if (ratio) {
+      // `ratio` é a razão de PIXEL do preset (ex.: 1 pra "1:1") — converte pra fração ANTES de travar
+      // (bug do spec review: sem essa conversão, "1:1" ficava quadrado em FRAÇÃO, não em pixel real,
+      // num frame não-quadrado; ver pixelRatioToFracRatio).
+      const fracRatio = pixelRatioToFracRatio(ratio, box);
       // usa a dimensão que precisa de mais "alcance" pra chegar no ponteiro, mantendo a razão travada
       // (candidata largura-guia vs altura-guia; escolhe a maior das duas, depois recorta pelo max
       // disponível — nunca deixa o retângulo sair de [0,1], mesmo que isso quebre a razão num canto
       // extremo do frame, caso raríssimo e aceitável em v1).
-      if (w / ratio >= h) { h = Math.min(w / ratio, maxH); w = h * ratio; }
-      else { w = Math.min(h * ratio, maxW); h = w / ratio; }
+      if (w / fracRatio >= h) { h = Math.min(w / fracRatio, maxH); w = h * fracRatio; }
+      else { w = Math.min(h * fracRatio, maxW); h = w / fracRatio; }
       w = clamp(w, MIN_SIZE, maxW);
       h = clamp(h, MIN_SIZE, maxH);
     }
