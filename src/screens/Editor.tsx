@@ -1,9 +1,10 @@
-// src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (só Ajustes funcional nesta task)
+// src/screens/Editor.tsx — shell do editor: canvas WebGL + toolbar de abas (Ajustes e Filtros funcionais)
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { createRenderer, type Renderer } from '../engine/renderer';
 import { editReducer, initialSnapshot } from '../state/editStack';
 import type { LoadedImage } from '../io/openImage';
 import AdjustPanel from '../tools/AdjustPanel';
+import FilterPanel from '../tools/FilterPanel';
 
 export interface EditorProps {
   image: LoadedImage;
@@ -100,6 +101,8 @@ export default function Editor({ image, onBack }: EditorProps) {
       <div className="editor-panel">
         {activeTab === 'ajustes' ? (
           <AdjustPanel present={history.present} dispatch={dispatch} />
+        ) : activeTab === 'filtros' ? (
+          <FilterPanel present={history.present} dispatch={dispatch} image={image} />
         ) : (
           <p className="panel-placeholder">Em breve</p>
         )}

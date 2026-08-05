@@ -311,3 +311,76 @@ input[type='range']::-moz-range-thumb {
   border: 2px solid #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
+
+/* ---------- FilterPanel ---------- */
+.filter-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.filter-carousel {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 2px 8px;
+  /* pan-x: permite o scroll horizontal do carrossel enquanto ainda deixa o gesto vertical
+     (ex.: scroll do .editor-panel) livre pro sistema decidir — diferente do slider (touch-action: none),
+     aqui não há arraste próprio a proteger, só a rolagem nativa. */
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.filter-carousel::-webkit-scrollbar {
+  display: none;
+}
+.filter-card {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 76px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0;
+  cursor: pointer;
+}
+.filter-thumb-wrap {
+  width: 72px;
+  height: 72px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-elevated-2);
+  border: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.filter-card.active .filter-thumb-wrap {
+  border-image: var(--brand-gradient) 1;
+  border-color: var(--brand-1); /* fallback p/ navegadores sem border-image (mantém destaque visível) */
+}
+.filter-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.filter-name {
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-card.active .filter-name {
+  color: var(--text);
+  font-weight: 700;
+}
+.filter-intensity-row {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
