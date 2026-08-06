@@ -8,7 +8,10 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   brightness: 0, contrast: 0, saturation: 0, exposure: 0, temperature: 0,
   shadows: 0, highlights: 0, sharpness: 0, vignette: 0,
 };
-export interface FilterOp { id: string; intensity: number } // 0..100
+// intensity 0..100. `appliedAt` (epoch ms) só existe em filtros-RELÓGIO (slim-black*, ver
+// engine/clockOverlay.ts): é o instante da APLICAÇÃO, parte do snapshot — undo/redo restauram a
+// mesma hora. NUNCA persiste em modelos (savePreset faz strip; reaplicar um modelo grava hora nova).
+export interface FilterOp { id: string; intensity: number; appliedAt?: number }
 export interface CropRect { x: number; y: number; w: number; h: number } // x,y = canto superior esquerdo em frações do frame pós-rotação (y cresce pra baixo)
 
 // Transforma um CropRect definido nas frações do frame ANTES de +1 rotate90 pras frações do frame

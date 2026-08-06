@@ -3,7 +3,9 @@
 // WebGL), sempre pointer-events:none — é decorativo, nunca captura gesto (o tap antes/depois
 // continua chegando no wrap). Montada pelo Editor só quando um filtro slim-black* está ativo e
 // fora de cropMode/showOriginal (mesma regra das anotações: o frame nesses modos é OUTRO).
-// O instante exibido vem do Editor (capturado quando o filtro ativa) — ver clockOverlay.ts.
+// O instante exibido vem do SNAPSHOT (filter.appliedAt, epoch ms — ver clockOverlay.ts) e a
+// opacidade segue a intensidade do filtro (0..100): o relógio é parte do look e desvanece com o
+// slider (em 0, drawClockOverlay não desenha nada).
 import { useEffect, useRef, type RefObject } from 'react';
 import { drawClockOverlay } from '../engine/clockOverlay';
 import { useCanvasBox } from './canvasGeometry';
@@ -11,10 +13,11 @@ import { useCanvasBox } from './canvasGeometry';
 export interface ClockOverlayProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   containerRef: RefObject<HTMLDivElement | null>;
-  appliedAt: Date;
+  appliedAt: number; // epoch ms (primitivo de propósito: identidade estável pro deps do efeito)
+  intensity: number; // 0..100 — intensidade atual do filtro
 }
 
-export default function ClockOverlay({ canvasRef, containerRef, appliedAt }: ClockOverlayProps) {
+export default function ClockOverlay({ canvasRef, containerRef, appliedAt, intensity }: ClockOverlayProps) {
   const layerRef = useRef<HTMLCanvasElement>(null);
   const box = useCanvasBox(canvasRef, containerRef);
 
@@ -29,8 +32,8 @@ export default function ClockOverlay({ canvasRef, containerRef, appliedAt }: Clo
     const ctx = layer.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, bw, bh);
-    drawClockOverlay(ctx, bw, bh, appliedAt);
-  }, [box, appliedAt]);
+    drawClockOverlay(ctx, bw, bh, new Date(appliedAt), intensity / 100);
+  }, [box, appliedAt, intensity]);
 
   if (!box) return null;
   return (

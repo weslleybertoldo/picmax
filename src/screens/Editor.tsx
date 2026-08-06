@@ -21,7 +21,7 @@ import AnnotatePanel from '../tools/AnnotatePanel';
 import EnhancePanel from '../tools/EnhancePanel';
 import AnnotationCanvas, { DEFAULT_ANNOTATE_COLOR, DEFAULT_ANNOTATE_SIZE, type AnnotateTool } from '../annotate/AnnotationCanvas';
 import ClockOverlay from '../tools/ClockOverlay';
-import { isClockFilter } from '../engine/clockOverlay';
+import { isClockFilter, withClockAppliedAt } from '../engine/clockOverlay';
 
 function exportFileName(mime: string): string {
   return `PicMax_${Date.now()}.${mime === 'image/png' ? 'png' : 'jpg'}`;
@@ -187,13 +187,15 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
   // dedos = gesto de outra natureza, nunca um tap). Sair do modo original é automático em qualquer
   // ação de edição — ver dispatchEdit abaixo.
   const [showOriginal, setShowOriginal] = useState(false);
-  // Relógio do Slim Black iOS (v1.1 r4): instante capturado quando o filtro ATIVA (spec: data/hora
-  // do momento da aplicação) — preview e export usam o MESMO instante. Ref + state: o state monta o
-  // overlay; a ref dá o instante pro export sem depender de re-render.
-  const clockAppliedAtRef = useRef<Date | null>(null);
+  // Relógio do Slim Black iOS (v1.1 r4; release review, bloqueante 4): o instante da aplicação vive
+  // no SNAPSHOT (filter.appliedAt, gravado por withClockAppliedAt no dispatch que aplica o filtro —
+  // FilterPanel.selectFilter / handleApplyPreset abaixo) — undo/redo restauram a mesma hora e o
+  // corpo do render fica puro (a versão anterior mutava uma ref aqui). Preview e export leem SÓ do
+  // snapshot; `clockAppliedAt === null` com filtro-relógio ativo só acontece em snapshot injetado
+  // por fora da UI (hook de dev) — nesse caso o overlay de preview não monta (o export usa fallback
+  // próprio, ver exportImage.ts).
   const filterIsClock = isClockFilter(history.present.filter?.id);
-  if (filterIsClock && clockAppliedAtRef.current === null) clockAppliedAtRef.current = new Date();
-  if (!filterIsClock && clockAppliedAtRef.current !== null) clockAppliedAtRef.current = null;
+  const clockAppliedAt = filterIsClock ? (history.present.filter?.appliedAt ?? null) : null;
   const tapRef = useRef<{ pointerId: number; x: number; y: number; t: number } | null>(null);
 
   useEffect(() => {
@@ -336,12 +338,20 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
   // Merge com DEFAULT_ADJUSTMENTS (forward-compat, review): um modelo salvo por uma versão anterior
   // do schema de Adjustments (campo novo adicionado depois) chegaria aqui sem essa chave — sem o
   // merge, o slider correspondente leria `undefined` (input não-controlado / NaN no render).
+  // withClockAppliedAt: modelo com filtro-relógio (slim-black*) ganha o `appliedAt` AGORA — o
+  // modelo persiste sem hora (strip no savePreset) e cada aplicação é uma aplicação nova; se um
+  // filtro-relógio já estava ativo, a hora existente é preservada (mesma regra do FilterPanel).
   function handleApplyPreset(preset: EditPreset) {
-    dispatchEdit({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter: preset.filter } });
+    const filter = preset.filter ? withClockAppliedAt(preset.filter, history.present.filter) : null;
+    dispatchEdit({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter } });
     setToast({ text: 'Modelo aplicado ✓', kind: 'ok' });
   }
 
+  // setShowOriginal(false) (release review, bloqueante 6): Salvar modelo age sobre a EDIÇÃO — sair
+  // do modo Original antes de abrir o modal, senão a tela segue mostrando o original enquanto o
+  // usuário nomeia o modelo do editado (mesma regra em openExportModal).
   function openSaveModal() {
+    setShowOriginal(false);
     setPresetName('');
     setShowSaveModal(true);
   }
@@ -380,6 +390,9 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
 
   function openExportModal(mode: 'export' | 'share') {
     if (exportBusy) return;
+    // Exportar/Compartilhar agem sobre a EDIÇÃO (release review, bloqueante 6): sai do modo
+    // Original antes — sem isso a tela mostrava o original enquanto o export do EDITADO acontecia.
+    setShowOriginal(false);
     // escolha lembrada da sessão só vale se ainda visível pra ESTA imagem (senão volta pra Máxima)
     const remembered = exportMaxSide !== null && exportMaxSide < frameMaxDim ? exportMaxSide : null;
     setExportChoice(remembered);
@@ -412,7 +425,7 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
     if (exportBusy) return;
     setExportBusy('export');
     try {
-      const blob = await exportImage(image, exportSnapshot(maxSide), { clockDate: clockAppliedAtRef.current ?? undefined });
+      const blob = await exportImage(image, exportSnapshot(maxSide));
       if (Capacitor.isNativePlatform()) {
         const base64 = await blobToBase64(blob);
         await ImageEnhancer.saveToGallery({ base64, mime: blob.type });
@@ -444,7 +457,7 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
     if (exportBusy) return;
     setExportBusy('share');
     try {
-      const blob = await exportImage(image, exportSnapshot(maxSide), { clockDate: clockAppliedAtRef.current ?? undefined });
+      const blob = await exportImage(image, exportSnapshot(maxSide));
       const base64 = await blobToBase64(blob);
       const { uri } = await Filesystem.writeFile({
         path: exportFileName(blob.type),
@@ -703,9 +716,15 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
             não do "original"). Sem esconder aqui, as anotações apareceriam fora de posição por cima da
             foto original enquanto o dedo segura. */}
         {/* Relógio do Slim Black iOS: parte do look do filtro (r4) — some junto com o filtro nos
-            modos que mostram OUTRO frame (crop/antes-e-depois), igual às anotações. */}
-        {!cropMode && !showOriginal && filterIsClock && clockAppliedAtRef.current && (
-          <ClockOverlay canvasRef={canvasRef} containerRef={canvasWrapRef} appliedAt={clockAppliedAtRef.current} />
+            modos que mostram OUTRO frame (crop/antes-e-depois), igual às anotações. Instante e
+            intensidade vêm do snapshot (bloqueantes 2/4). */}
+        {!cropMode && !showOriginal && filterIsClock && clockAppliedAt !== null && history.present.filter && (
+          <ClockOverlay
+            canvasRef={canvasRef}
+            containerRef={canvasWrapRef}
+            appliedAt={clockAppliedAt}
+            intensity={history.present.filter.intensity}
+          />
         )}
         {!cropMode && !showOriginal && (
           <AnnotationCanvas
@@ -754,7 +773,15 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
                 present={history.present}
                 dispatch={dispatchEdit}
                 tool={annotateTool}
-                onToolChange={setAnnotateTool}
+                // setShowOriginal(false) junto (release review, bloqueante 3): entrar no modo
+                // Original sem ferramenta e SÓ ENTÃO selecionar uma deixava o editor num beco —
+                // com ferramenta ativa o tap no canvas vira anotação (handleTapStart ignora), o
+                // toggle nunca volta e o hint "toque para voltar" mente. Selecionar/trocar/desativar
+                // ferramenta é intenção de EDIÇÃO — sai do modo Original como qualquer dispatch.
+                onToolChange={(tool) => {
+                  setShowOriginal(false);
+                  setAnnotateTool(tool);
+                }}
                 color={annotateColor}
                 onColorChange={setAnnotateColor}
                 size={annotateSize}

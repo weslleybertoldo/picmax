@@ -43,7 +43,11 @@ export async function listPresets(): Promise<EditPreset[]> {
 
 export async function savePreset(p: Omit<EditPreset, 'id' | 'createdAt'>): Promise<EditPreset> {
   const all = await listPresets();
-  const preset: EditPreset = { ...p, id: genId(), createdAt: new Date().toISOString() };
+  // Strip do `appliedAt` do filtro-relógio (slim-black*): o instante da aplicação é estado da
+  // EDIÇÃO (snapshot/undo), não da receita — um modelo reaplicado ganha hora NOVA na aplicação
+  // (withClockAppliedAt em engine/clockOverlay.ts). Reconstrói o objeto só com id+intensity.
+  const filter = p.filter ? { id: p.filter.id, intensity: p.filter.intensity } : null;
+  const preset: EditPreset = { ...p, filter, id: genId(), createdAt: new Date().toISOString() };
   await Preferences.set({ key: KEY, value: JSON.stringify([preset, ...all]) });
   return preset;
 }

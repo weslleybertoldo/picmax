@@ -2,6 +2,7 @@
 // toque aplica 100%, slider ajusta intensidade — mesmo comportamento nas duas seções.
 import { useEffect, useRef, useState, type Dispatch } from 'react';
 import { createRenderer } from '../engine/renderer';
+import { withClockAppliedAt } from '../engine/clockOverlay';
 import { FILTERS } from '../engine/filters';
 import { AR_FILTERS, IG_FILTERS } from '../engine/igFilters';
 import { DEFAULT_ADJUSTMENTS, DEFAULT_GEOMETRY, type EditAction, type EditSnapshot, type FilterOp } from '../state/editStack';
@@ -145,17 +146,20 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
 
   const gesture = useSliderGesture<string>({
     getCurrent: () => (liveRef.current ? { target: liveRef.current.id, value: liveRef.current.intensity } : null),
+    // Spread do filtro atual (não `{ id, intensity }` reconstruído): preserva o `appliedAt` do
+    // filtro-relógio através do arraste do slider de intensidade — mexer na intensidade NÃO é uma
+    // nova aplicação, a hora fica a mesma (ver clockOverlay.ts).
     onPreview: (value) => {
-      const id = liveRef.current?.id;
-      if (!id) return;
-      const next: FilterOp = { id, intensity: value };
+      const current = liveRef.current;
+      if (!current) return;
+      const next: FilterOp = { ...current, intensity: value };
       liveRef.current = next; // visível pra próxima chamada ANTES do re-render
       dispatch({ type: 'preview', patch: { filter: next } });
     },
     onSet: (value) => {
-      const id = liveRef.current?.id;
-      if (!id) return;
-      const next: FilterOp = { id, intensity: value };
+      const current = liveRef.current;
+      if (!current) return;
+      const next: FilterOp = { ...current, intensity: value };
       liveRef.current = next;
       dispatch({ type: 'set', patch: { filter: next } });
     },
@@ -173,7 +177,10 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
       return;
     }
     if (current?.id === id && current.intensity === 100) return;
-    const next: FilterOp = { id, intensity: 100 };
+    // withClockAppliedAt: filtro-relógio (slim-black*) ganha `appliedAt` agora na transição
+    // não-relógio → relógio; entre variantes/reaplicação preserva a hora já gravada. Filtros
+    // comuns passam intactos (ver clockOverlay.ts).
+    const next: FilterOp = withClockAppliedAt({ id, intensity: 100 }, current);
     liveRef.current = next;
     dispatch({ type: 'set', patch: { filter: next } });
   }
