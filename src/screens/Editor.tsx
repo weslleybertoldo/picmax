@@ -810,6 +810,8 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
                 image={image}
                 onNewBase={handleNewBase}
                 basesCount={bases.length}
+                onApplyPreset={handleApplyPreset}
+                presetsVersion={presetsVersion}
               />
             )}
           </div>

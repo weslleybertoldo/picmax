@@ -1,7 +1,8 @@
-// src/tools/EnhancePanel.tsx — aba Melhorar: 2 cards empilhados (auto-ajuste instantâneo da T9 +
-// IA Real-ESRGAN 4x offline da T10, só em plataforma nativa — no web dev o botão fica desabilitado
-// com hint, não existe libpicmaxenhance.so fora do APK). v1.1: os 2 cards ganharam estado "Aplicado ✓"
-// PERMANENTE com toggle de desfazer (ver handleAutoEnhance/handleAiClick).
+// src/tools/EnhancePanel.tsx — aba Melhorar: seção "Meus modelos" expansível (v1.1.1, pedido do
+// Weslley) + 2 cards empilhados (auto-ajuste instantâneo da T9 + IA Real-ESRGAN 4x offline da T10,
+// só em plataforma nativa — no web dev o botão fica desabilitado com hint, não existe
+// libpicmaxenhance.so fora do APK). v1.1: os 2 cards ganharam estado "Aplicado ✓" PERMANENTE com
+// toggle de desfazer (ver handleAutoEnhance/handleAiClick).
 import { useState, type Dispatch } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
@@ -10,6 +11,8 @@ import type { EditAction, EditSnapshot } from '../state/editStack';
 import { loadedImageFromBlob, type LoadedImage } from '../io/openImage';
 import { blobToBase64 } from '../io/blobToBase64';
 import { ImageEnhancer } from '../native/imageEnhancer';
+import PresetsPanel from '../presets/PresetsPanel';
+import type { EditPreset } from '../presets/presets';
 
 export interface EnhancePanelProps {
   present: EditSnapshot;
@@ -21,6 +24,11 @@ export interface EnhancePanelProps {
   // v1.1: tamanho do array de bases do App — permite REAPLICAR a IA sem reprocessar quando um
   // resultado já existe (bases.length > 1): só volta o baseVersion pro índice do resultado.
   basesCount: number;
+  // "Meus modelos" (v1.1.1): aplicar um modelo daqui usa o MESMO handler da aba Filtros
+  // (handleApplyPreset do Editor — set desfazível + toast "Modelo aplicado ✓").
+  onApplyPreset: (preset: EditPreset) => void;
+  // bump do Editor pra reler o storage sem remontar (mesma técnica da aba Filtros).
+  presetsVersion: number;
 }
 
 // Estado do fluxo de IA. usingGpu null = ainda sem o 1º evento de progresso (o Kotlin emite percent
@@ -29,9 +37,13 @@ type AiState =
   | { phase: 'idle' }
   | { phase: 'running'; percent: number; usingGpu: boolean | null; cancelling: boolean };
 
-export default function EnhancePanel({ present, dispatch, image, onNewBase, basesCount }: EnhancePanelProps) {
+export default function EnhancePanel({ present, dispatch, image, onNewBase, basesCount, onApplyPreset, presetsVersion }: EnhancePanelProps) {
   const [aiState, setAiState] = useState<AiState>({ phase: 'idle' });
   const [aiError, setAiError] = useState<string | null>(null);
+  // "Meus modelos" (v1.1.1): COLAPSADO por default (estado local — trocar de aba recolhe, mesmo
+  // racional do activeKey do AdjustPanel). O card nunca some quando não há modelos (descobribilidade):
+  // expandir sem modelos mostra "Nenhum modelo salvo ainda" (emptyMessage do PresetsPanel).
+  const [presetsOpen, setPresetsOpen] = useState(false);
   const isNative = Capacitor.isNativePlatform();
 
   // Estado "Aplicado ✓" do auto-ajuste (v1.1): vive no SNAPSHOT (present.autoEnhance), não em state
@@ -142,6 +154,34 @@ export default function EnhancePanel({ present, dispatch, image, onNewBase, base
 
   return (
     <div className="enhance-panel">
+      {/* "Meus modelos" (v1.1.1): ACIMA do Ajuste automático. Header inteiro é o botão de
+          expandir/colapsar (chevron gira); o conteúdo reusa o PresetsPanel inline da aba Filtros —
+          tocar num modelo aplica via onApplyPreset (set desfazível + toast no Editor). */}
+      <div className="enhance-card">
+        <button
+          type="button"
+          className="enhance-presets-toggle"
+          data-testid="enhance-presets-toggle"
+          aria-expanded={presetsOpen}
+          onClick={() => setPresetsOpen((o) => !o)}
+        >
+          <h3 className="enhance-card-title">Meus modelos</h3>
+          <span className={`enhance-presets-chevron${presetsOpen ? ' open' : ''}`} aria-hidden="true">
+            ▾
+          </span>
+        </button>
+        {presetsOpen && (
+          <div data-testid="enhance-presets-content">
+            <PresetsPanel
+              variant="inline"
+              onApply={onApplyPreset}
+              refreshKey={presetsVersion}
+              emptyMessage="Nenhum modelo salvo ainda"
+            />
+          </div>
+        )}
+      </div>
+
       <div className="enhance-card">
         <div className="enhance-card-header">
           <h3 className="enhance-card-title">Ajuste automático</h3>
