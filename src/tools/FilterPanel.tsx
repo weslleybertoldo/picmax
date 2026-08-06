@@ -228,7 +228,7 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
       </div>
 
       <h4 className="filter-section-title">Instagram</h4>
-      <div className="filter-carousel" data-testid="filter-carousel-ig">
+      <div className="filter-carousel" data-testid="filter-carousel-instagram">
         {IG_FILTERS.map((f) => (
           <button
             key={f.id}
@@ -245,8 +245,12 @@ export default function FilterPanel({ present, dispatch, image, onApplyPreset, p
         ))}
       </div>
 
+      {/* testids (limpeza pré-release): cada carrossel tem o SEU testid semântico
+          (filter-carousel-ar / -instagram / -classicos) — o antigo `filter-carousel` da v1.0 (então
+          único, com o card Original que hoje vive no AR) tinha sido reciclado pros Clássicos e
+          confundia seletores de teste. */}
       <h4 className="filter-section-title">Clássicos</h4>
-      <div className="filter-carousel" data-testid="filter-carousel">
+      <div className="filter-carousel" data-testid="filter-carousel-classicos">
         {FILTERS.map((f) => (
           <button
             key={f.id}

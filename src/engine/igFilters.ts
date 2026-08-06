@@ -58,7 +58,10 @@ export interface IgFilterDef {
   clarity?: number;
   clarityRadius?: number;
   // Motion blur direcional (v1.1 r3/r4 — "The Motto"): smear de 16 taps ao longo de `angle` (graus,
-  // 0 = horizontal→direita, 90 = vertical→baixo em coords de tela), comprimento TOTAL `length` como
+  // 0 = horizontal→direita, 90 = vertical→baixo em coords de TEXTURA/UV — o passo é somado em vUv
+  // no shader, ANTES da geometria, então com rotate90 o smear GIRA JUNTO com o conteúdo; num frame
+  // girado 90°, angle 0 aparece vertical na tela. Aceitável pro The Motto: o smear acompanha a
+  // cena, não o enquadramento). Comprimento TOTAL `length` como
   // fração da largura da textura (mesma convenção do clarityRadius). `echo` (r4) = cluster
   // fantasma de 8 taps: deslocado `offset` (fração da largura, ao longo do MESMO angle; pode ser
   // negativo), comprimento próprio `length`, misturado por `amount` (0..1) — recria o eco/ghosting
@@ -364,44 +367,12 @@ export const IG_FILTERS: IgFilterDef[] = [
   },
 ];
 
-// ---- PENDENTE de aprovação (fora do carrossel; resolvível pelo renderer só pra prévias) ----
-// O Aesthetic Blur foi REPROVADO 2x pelo Weslley ("bem diferente" da referência) — a def abaixo é o
-// melhor candidato até aqui e fica FORA da UI até um candidato ser aprovado (rodada 5: varredura
-// c1..c6 de blur × névoa nas prévias).
-export const R3_FILTERS: IgFilterDef[] = [
-  // "Aesthetic Blur" (11.png; r4, refit após feedback "fraco/sem névoa"): soft focus/glow (softBlur
-  // r 1.5% da largura, amount 0.55) + NÉVOA/haze (camada screen que eleva os pretos — p5 da luma
-  // 6 vs 7 da ref; base era ~1) + radial multiply com CENTRO morno → borda fria/escura (tint e
-  // vinheta numa camada só) + dessaturação. Parâmetros = fit numérico + ITERAÇÃO VISUAL (pedido do
-  // Weslley): o ótimo numérico (r 0.027/amt 0.75) borrava MUITO mais que a ref no lado a lado — as
-  // métricas de gradiente enganaram (JPEG da ref infla alta frequência; anel de 13 taps ≠ glow) —
-  // blur reduzido e névoa reforçada dão o melhor MAE de todos os candidatos: 8.8/8.1/8.2 (contra a
-  // cópia JPEG 700px — o PNG original foi perdido com o image-cache; ver fit-r4.mjs). Fit devolvia
-  // centro R=1.037 (>1, irrepresentável em cor 0..255) — renormalizado (gradiente ÷1.037,
-  // brightness ×1.037 = 0.757), métricas idênticas. Limite conhecido: o blur real tem componente
-  // direcional (aniso ref 1.84 vs ~0.5 do nosso isotrópico) — só com 2º pass.
-  {
-    id: 'aesthetic-blur',
-    name: 'Aesthetic Blur',
-    ops: [op('contrast', 1.14), op('brightness', 0.757), op('saturate', 0.751)],
-    layers: [
-      {
-        kind: 'radial', // centro morno → borda fria; rampa longa (t1≈1.9 → ~metade até o canto)
-        center: [0.5, 0.5],
-        stops: [
-          { color: [255, 235, 235, 1], pos: 0 },
-          { color: [182, 205, 221, 1], pos: 1.9 },
-        ],
-        blend: 'multiply',
-      },
-      { kind: 'solid', color: [9, 22, 4, 1], blend: 'screen' }, // névoa: eleva os pretos (p5 6/7)
-    ],
-    softBlur: { radius: 0.015, amount: 0.55 },
-  },
-];
+// (v1.1: o "Aesthetic Blur" foi DESCARTADO pelo Weslley após 7 rodadas — o look real exige LUT 3D
+// (dessaturação seletiva de matiz) + blur direcional, fora do alcance das primitivas do shader. A
+// def experimental que vivia aqui num R3_FILTERS fora do carrossel foi removida na limpeza da
+// release; histórico completo nos reports da v1.1.)
 
 export const igFilterById = (id: string): IgFilterDef | null =>
   AR_FILTERS.find((f) => f.id === id) ??
   IG_FILTERS.find((f) => f.id === id) ??
-  R3_FILTERS.find((f) => f.id === id) ??
   null;

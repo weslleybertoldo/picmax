@@ -72,9 +72,12 @@ export default function AdjustPanel({ present, dispatch }: AdjustPanelProps) {
     setActiveKey((current) => (current === key ? null : key));
   }
 
+  // autoEnhance: null no MESMO set (limpeza pré-release): restaurar zera os ajustes, então o card
+  // "Aplicado ✓" da aba Melhorar deixaria de refletir a realidade (o toggle de desfazer restauraria
+  // um `before` de um estado que não existe mais) — restaurar ajustes desfaz também o auto-ajuste.
   function restoreDefaults() {
     liveRef.current = { ...DEFAULT_ADJUSTMENTS };
-    dispatch({ type: 'set', patch: { adjustments: liveRef.current } });
+    dispatch({ type: 'set', patch: { adjustments: liveRef.current, autoEnhance: null } });
   }
 
   const active = activeKey ? (CHIPS.find((c) => c.key === activeKey) ?? null) : null;

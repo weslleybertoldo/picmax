@@ -43,7 +43,9 @@ function isNeutralSnapshot(s: EditSnapshot): boolean {
     s.geometry.flipV === DEFAULT_GEOMETRY.flipV &&
     s.geometry.straighten === DEFAULT_GEOMETRY.straighten &&
     s.geometry.crop === DEFAULT_GEOMETRY.crop &&
-    s.geometry.resizeMaxSide === DEFAULT_GEOMETRY.resizeMaxSide &&
+    // resizeMaxSide fica FORA da checagem de propósito (limpeza pré-release): desde a v1.1 ele nunca
+    // mais é setado por dispatch (o modal de resolução injeta o valor só na hora do export, sem
+    // histórico) — comparação era código morto.
     (Object.keys(DEFAULT_ADJUSTMENTS) as Array<keyof typeof DEFAULT_ADJUSTMENTS>).every(
       (k) => s.adjustments[k] === DEFAULT_ADJUSTMENTS[k],
     )
@@ -341,9 +343,15 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
   // withClockAppliedAt: modelo com filtro-relógio (slim-black*) ganha o `appliedAt` AGORA — o
   // modelo persiste sem hora (strip no savePreset) e cada aplicação é uma aplicação nova; se um
   // filtro-relógio já estava ativo, a hora existente é preservada (mesma regra do FilterPanel).
+  // autoEnhance: null no mesmo set (limpeza pré-release): o modelo SUBSTITUI os ajustes por inteiro,
+  // então o "Aplicado ✓" do auto-ajuste (e seu `before`) deixa de fazer sentido — mesma regra do
+  // "Restaurar ajustes" (AdjustPanel).
   function handleApplyPreset(preset: EditPreset) {
     const filter = preset.filter ? withClockAppliedAt(preset.filter, history.present.filter) : null;
-    dispatchEdit({ type: 'set', patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter } });
+    dispatchEdit({
+      type: 'set',
+      patch: { adjustments: { ...DEFAULT_ADJUSTMENTS, ...preset.adjustments }, filter, autoEnhance: null },
+    });
     setToast({ text: 'Modelo aplicado ✓', kind: 'ok' });
   }
 
@@ -393,6 +401,14 @@ export default function Editor({ bases, onAddBase, onBack, exportMaxSide, onExpo
     // Exportar/Compartilhar agem sobre a EDIÇÃO (release review, bloqueante 6): sai do modo
     // Original antes — sem isso a tela mostrava o original enquanto o export do EDITADO acontecia.
     setShowOriginal(false);
+    // Frame pequeno (limpeza pré-release): sem NENHUMA opção menor que o frame, o modal só teria
+    // "Máxima" — pergunta sem escolha. Pula direto pra ação na resolução máxima (null), sem tocar
+    // na escolha lembrada da sessão (ela segue valendo pra próxima imagem em que fizer sentido).
+    if (visibleSizeOptions.length === 0) {
+      if (mode === 'export') void handleExport(null);
+      else void handleShare(null);
+      return;
+    }
     // escolha lembrada da sessão só vale se ainda visível pra ESTA imagem (senão volta pra Máxima)
     const remembered = exportMaxSide !== null && exportMaxSide < frameMaxDim ? exportMaxSide : null;
     setExportChoice(remembered);
